@@ -1,0 +1,17 @@
+# History files
+.Rhistory
+.RData
+.Ruserdata
+
+# Project files
+.Rproj.user/
+
+# Data folder (CRITICAL: Do not upload raw data to GitHub)
+data/
+*.csv
+*.xlsx
+*.rds
+
+# Documentation/Plots you might want to keep private
+*.log
+*.pdf
