@@ -28,4 +28,4 @@ I evaluated five classification algorithms to find the optimal balance between p
 * **Scalability:** The pipeline is designed for non-invasive wearable sensors, making it viable for industrial deployment in automotive or electronics manufacturing.
 
 ---
-*Note: Due to data privacy and governance protocols, raw biometric datasets are excluded. Full modeling scripts (R Markdown) are located in the `/scripts` folder.*
+*Note: Due to data privacy and governance protocols, raw biometric datasets are excluded. Full modeling scripts (R Markdown) are located in the `/scripts and /python_scripts` folder.*
