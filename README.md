@@ -2,21 +2,30 @@
 **Kirk-Mends Attafuah | MSc Statistics, Wake Forest University**
 
 ### Project Overview
-This research addresses the "Cognitive Safety" gap in high-stakes operational environments. I developed a machine learning pipeline to predict human stress states using multimodal physiological signals (EDA, ECG, and Heart Rate), allowing for adaptive safety interventions in complex human-robot systems.
+This research addresses the **"Cognitive Safety"** gap in high-stakes operational environments. While current ISO standards focus on physical safety, this project develops a machine learning framework to monitor operator well-being. Using multimodal physiological signals (EDA, ECG, and Heart Rate), I built a predictive pipeline to identify stress states, enabling adaptive safety interventions in complex human-robot systems.
 
-### Technical Challenges and Data Engineering
-The primary challenge was the raw sensor data, which was asynchronous and noisy. I architected a custom ETL workflow in R to:
-* Reconstruct inconsistent timestamps to align multimodal signals.
-* Normalize data across multiple test subjects to ensure model generalizability.
-* Extract 50+ statistical and physiological features, specifically identifying Heart Rate Variability (HRV) as a key indicator.
+### Technical Challenges & Data Engineering
+The primary challenge was managing high-velocity, asynchronous sensor data. I architected a custom ETL workflow in R to:
+* **Timestamp Reconstruction:** Implemented conditional parsing to align heterogeneous data formats across multiple wearable sensors.
+* **Multimodal Integration:** Synchronized EDA (Electrodermal Activity), HR (Heart Rate), and ECG (Electrocardiogram) signals into a unified feature set.
+* **Baseline Normalization:** Applied **Baseline Subtraction** to normalize individual physiological differences, ensuring model generalizability across 21 different test subjects.
+* **Feature Engineering:** Extracted 50+ statistical and physiological features, including **RMSSD** for heart rate variability and **SCR (Skin Conductance Response)** metrics.
 
-### Model Benchmarking
-I evaluated several classification algorithms to find the best balance between latency and accuracy:
-* **Models Tested:** Logistic Regression, SVM, k-NN, Gradient Boosting, and Random Forest.
-* **Selection:** Random Forest delivered the most robust performance, effectively handling the non-linear spikes typical in biometric telemetry.
+### Model Benchmarking & Performance
+I evaluated five classification algorithms to find the optimal balance between predictive power and operational latency. The results confirmed that non-linear ensemble methods are superior for biometric telemetry:
 
-### Results and Insights
-The final model achieved an accuracy of [Your %]. The project demonstrates that raw, noisy biometric data can be transformed into a reliable safety layer for real-time operational decision-making.
+| Model | ROC-AUC | Note |
+| :--- | :--- | :--- |
+| **Random Forest** | **0.971** | **Selected for production-grade robustness** |
+| Gradient Boosting (GBM) | 0.914 | Strong performance, slightly higher latency |
+| SVM | 0.876 | Good discrimination, less robust to noise |
+| Logistic Regression | 0.709 | Insufficient for non-linear stress signals |
+| GLMNET | 0.706 | Limited by linear constraints |
+
+### Key Results & Industry Impact
+* **High Precision:** The Random Forest model achieved a **0.971 AUC**, demonstrating excellent discrimination between stress and non-stress states.
+* **Operational Insight:** Identified Heart Rate Variability (HRV) and Skin Conductance as the most significant "signals" for real-time stress monitoring.
+* **Scalability:** The pipeline is designed for non-invasive wearable sensors, making it viable for industrial deployment in automotive or electronics manufacturing.
 
 ---
-*Note: Raw biometric datasets are excluded per data privacy and governance protocols. Cleaning and modeling scripts are located in the /scripts folder.*
+*Note: Due to data privacy and governance protocols, raw biometric datasets are excluded. Full modeling scripts (R Markdown) are located in the `/scripts` folder.*
