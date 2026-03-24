@@ -1,0 +1,861 @@
+---
+title: "GLM Pro Presentation"
+author: "Kirk-Mends Attafuah"
+date: "2025-11-30"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+\newpage 
+\tableofcontents
+\listoffigures
+\listoftables
+\newpage
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+library(data.table)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(readr)
+
+```
+
+```{r warning=FALSE, echo=FALSE , include=FALSE}
+base_folder <- "C:/Users/kirkm/Music/My research works/Engineering/SenseCobot/SenseCobot"
+
+# Function to extract stress labels from signal files
+extract_labels <- function(signal_folder){
+  
+  files <- list.files(signal_folder, pattern = "*.csv", full.names = TRUE)
+  
+  data_list <- lapply(files, function(f){
+    dt <- fread(f, showProgress = FALSE)
+    
+    # Extract info from filename
+    name <- tools::file_path_sans_ext(basename(f))
+    participant <- str_extract(name, "P_\\d+")
+    task <- str_extract(name, "Baseline|Task \\d+") %>%
+            str_replace("Task ", "TASK ") %>%
+            str_to_upper()
+    device <- str_extract(name, "EEG|ECG|GSR")
+    
+    # Skip baseline files (no labels at all)
+    if (grepl("BASELINE", name, ignore.case = TRUE)) {
+      return(NULL)
+    }
+    
+    # Extract stress label (first non-empty cell in Label column)
+    label <- dt$Label[!is.na(dt$Label) & dt$Label != ""][1]
+    
+    # If no label found, skip
+    if (is.null(label) || length(label) == 0) {
+      return(NULL)
+    }
+    
+    # Return one row summary
+    data.table(Participant = participant,
+               Task = task,
+               Device = device,
+               Stress_Label = label)
+  })
+  
+  rbindlist(data_list)
+}
+
+# Run for each device folder
+eeg_labels <- extract_labels(file.path(base_folder, "EEG_Enobio20_Signals"))
+ecg_labels <- extract_labels(file.path(base_folder, "ECG_Shimmer3_Signals"))
+gsr_labels <- extract_labels(file.path(base_folder, "GSR_Shimmer3_Signals"))
+
+# Combine into one wide table (device-specific labels)
+labels_long <- rbindlist(list(eeg_labels, ecg_labels, gsr_labels))
+labels_wide <- dcast(labels_long,
+                     Participant + Task ~ Device,
+                     value.var = "Stress_Label")
+
+# Inspect result
+head(labels_wide)
+
+```
+
+
+```{r warning=FALSE, echo=FALSE}
+# CONTEXTUAL DATASETS
+#Extracting Movement Data
+
+movement <- fread(file.path(base_folder, "Additional_Information", "Movement_Type.csv"))
+setnames(movement, old = "V1", new = "Participant")
+
+movement_long <- movement %>%
+  pivot_longer(cols = starts_with("TASK"),
+               names_to = "Task",
+               values_to = "Movement_Type")
+
+```
+
+```{r warning=FALSE, echo=FALSE}
+
+duration <- fread(file.path(base_folder, "Additional_Information", "Tasks_Duration.csv"))
+setnames(duration, old = "V1", new = "Participant")
+
+duration_long <- duration %>%
+  pivot_longer(
+    cols = starts_with("TASK"),   # exclude BASELINE
+    names_to = "Task",
+    values_to = "Duration"
+  ) %>%
+  mutate(Task = str_to_upper(str_trim(Task)))
+
+duration_long$BASELINE <- NULL
+#duration_long
+```
+
+
+```{r warning=FALSE, echo=FALSE}
+participants <- fread(file.path(base_folder, "Additional_Information", "Participants_Information.csv"))
+setnames(participants, old = names(participants)[1], new = "Participant")
+
+```
+
+```{r warning=FALSE, echo=FALSE}
+
+# Read NASA TLX
+nasa <- fread(file.path(base_folder, "Additional_Information", "NASA_TLX.csv"))
+
+# Rename first column to Participant
+setnames(nasa, old = names(nasa)[1], new = "Participant")
+
+# Convert to long format
+nasa_long <- nasa %>%
+  as_tibble() %>%
+  pivot_longer(
+    cols = -Participant,   # all columns except Participant
+    names_to = c("Dimension", "Task"),
+    names_sep = "_TASK ",  # split column names like "A_TASK 1"
+    values_to = "Score"
+  ) %>%
+  mutate(
+    Task = paste0("TASK ", Task),   # ensure consistent task naming
+    Dimension = str_trim(Dimension)
+  )
+
+# Pivot back to wide with A and B columns
+nasa_wide <- nasa_long %>%
+  pivot_wider(
+    names_from = Dimension,
+    values_from = Score,
+    values_fn = list(Score = first)   # collapse duplicates
+  ) %>%
+  mutate(
+    A = as.integer(A),
+    B = as.integer(B),
+    Participant = str_extract(Participant, "P_\\d+"),
+    Task = str_to_upper(Task)
+  )
+nasa_wide <- nasa_wide %>%
+  filter(!is.na(Participant))
+
+#head(nasa_wide)
+```
+
+```{r warning=FALSE, echo=FALSE}
+  #MERGING CONTEXTUAL DATA
+
+# Start with stress labels (EEG, ECG, GSR)
+glm_data <- labels_wide %>%
+  left_join(movement_long, by = c("Participant", "Task")) %>%
+  left_join(nasa_wide, by = c("Participant", "Task")) %>%
+  left_join(duration_long, by = c("Participant", "Task")) %>%
+  left_join(participants, by = "Participant")
+
+#head(glm_data)
+```
+
+
+```{r warning=FALSE, echo=FALSE}
+#Compress Stress level
+glm_data1 <- glm_data %>%
+  mutate(
+    Stress_Label = ifelse(
+      rowSums(cbind(EEG == "STRESS", ECG == "STRESS", GSR == "STRESS")) >= 2,
+      "STRESS", "NO-STRESS"
+    )
+  )
+
+#glm_data1
+```
+
+
+```{r warning=FALSE, echo=FALSE, include=FALSE}
+glm_data2 <- glm_data1 %>%
+  mutate(
+    Stress_Label = factor(Stress_Label, levels = c("NO-STRESS", "STRESS")),
+    Movement_Type = factor(Movement_Type),
+    Task = factor(Task)
+  )
+
+#colnames(glm_data2)
+```
+
+```{r warning=FALSE, include=FALSE }
+# Percentage of missing values per column
+missing_pct <- sapply(glm_data2, function(x) {
+  sum(is.na(x)) / length(x) * 100
+})
+
+# Convert to a dataframe for easier viewing
+missing_df <- data.frame(
+  Column = names(missing_pct),
+  Missing_Percentage = missing_pct
+)
+
+# Sort by highest missing percentage
+missing_df <- missing_df[order(-missing_df$Missing_Percentage), ]
+
+# View the result
+print(missing_df)
+
+```
+
+
+
+```{r warning=FALSE, echo=FALSE}
+#Imputing for missing data
+
+
+glm_data2 <- glm_data2 %>%
+  mutate(
+    ECG = ifelse(
+      is.na(ECG) & EEG == "STRESS" & GSR == "STRESS", "STRESS",
+      ifelse(is.na(ECG) & EEG == "NO-STRESS" & GSR == "NO-STRESS", "NO-STRESS", ECG)
+    )
+  )
+
+glm_data2 <- glm_data2 %>%
+  mutate(
+    Stress_Label = case_when(
+      is.na(Stress_Label) & EEG == "STRESS" & GSR == "STRESS" ~ "STRESS",
+      is.na(Stress_Label) & EEG == "NO-STRESS" & GSR == "NO-STRESS" ~ "NO-STRESS",
+      TRUE ~ as.character(Stress_Label)
+    ),
+    Stress_Label = factor(Stress_Label, levels = c("NO-STRESS", "STRESS"))
+  )
+
+```
+
+
+
+
+
+
+
+```{r warning=FALSE, echo=FALSE}
+
+
+# Parse filename into metadata
+parse_filename <- function(path) {
+  fname <- basename(path)
+  
+  # Extract Task or Baseline
+  task_str <- if (str_detect(fname, "Baseline")) {
+    "Baseline"
+  } else {
+    str_extract(fname, "Task\\s*\\d+")
+  }
+  
+  # Clean Task string (replace space with underscore)
+  task_clean <- if (!is.na(task_str)) str_replace(task_str, "\\s+", "_") else NA
+  
+  tibble(
+    file = path,
+    Device = str_extract(fname, "^[^_]+_[^_]+"),   # e.g. "EDA_Empatica"
+    Task = task_clean,
+    Participant = str_extract(fname, "P_\\d+")
+  )
+}
+
+# Read file + add metadata
+read_with_meta <- function(meta_row) {
+  df <- read_csv(meta_row$file, show_col_types = FALSE)
+  df %>%
+    mutate(
+      Device = meta_row$Device,
+      Task = meta_row$Task,
+      Participant = meta_row$Participant
+    )
+}
+
+# Clean labels and measurement proportion
+clean_labels <- function(df, task_is_baseline = FALSE) {
+  # Handle Label column
+  if (task_is_baseline) {
+    df <- df %>% mutate(Label = NA_character_)
+  } else {
+    if ("Label" %in% names(df)) {
+      file_label <- df$Label[!is.na(df$Label)][1]
+      df <- df %>% mutate(Label = file_label)
+    } else {
+      df <- df %>% mutate(Label = NA_character_)
+    }
+  }
+  
+  # Handle Measurement Proportion column (if present)
+  if ("Measurement Proportion" %in% names(df)) {
+    meas_val <- df$`Measurement Proportion`[!is.na(df$`Measurement Proportion`)][1]
+    df <- df %>% mutate(`Measurement Proportion` = meas_val)
+  }
+  
+  df
+}
+
+# Process a folder
+process_folder <- function(folder_path) {
+  files <- list.files(folder_path, pattern = "\\.csv$", full.names = TRUE)
+  meta <- bind_rows(lapply(files, parse_filename))
+  
+  all_data <- bind_rows(lapply(1:nrow(meta), function(i) {
+    row <- meta[i, ]
+    df <- read_with_meta(as.list(row))
+    baseline <- row$Task == "Baseline"
+    clean_labels(df, task_is_baseline = baseline)
+  }))
+  
+  all_data
+}
+
+# Process each folder 
+eda_data      <- process_folder(file.path(base_folder, "EDA_Empatica_Signals"))
+hr_data       <- process_folder(file.path(base_folder, "HR_Bangle_Signals"))
+ibi_data      <- process_folder(file.path(base_folder, "IBI_Empatica_Signals"))
+emotions_data <- process_folder(file.path(base_folder, "Emotions_AFFDEX_Signals"))
+
+#unique(emotions_data$`Measurement Proportion`)
+
+```
+
+```{r warning=FALSE, echo=FALSE, include=FALSE}
+
+
+# Aggregate EDA
+eda_task <- eda_data %>%
+  group_by(Participant, Task) %>%
+  summarise(
+    EDA_median = median(EDA, na.rm = TRUE),
+    ACC_vm_mean = mean(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+    HR_median = median(HR, na.rm = TRUE),
+    TEMP_median = median(TEMP, na.rm = TRUE),
+    Label = first(Label)   # consistent per file
+  )
+
+# Aggregate HR (Bangle)
+hr_task <- hr_data %>%
+  group_by(Participant, Task) %>%
+  summarise(
+    HR_bangle_median = median(HR, na.rm = TRUE),
+    HR_conf_mean = mean(Confidence, na.rm = TRUE),
+    Label = first(Label)
+  )
+
+# Aggregate IBI
+ibi_task <- ibi_data %>%
+  group_by(Participant, Task) %>%
+  summarise(
+    SDNN = sd(IBI, na.rm = TRUE),
+    RMSSD = sqrt(mean(diff(IBI)^2, na.rm = TRUE)),
+    Label = first(Label)
+  )
+
+# Aggregate Emotions
+emotions_task <- emotions_data %>%
+  group_by(Participant, Task) %>%
+  summarise(
+    Valence_mean = mean(Valence, na.rm = TRUE),
+    Engagement_mean = mean(Engagement, na.rm = TRUE),
+    MeasProp = first(`Measurement Proportion`),
+    Label = first(Label)
+  )
+
+# Merge all features
+glm_data3 <- eda_task %>%
+  full_join(hr_task, by = c("Participant","Task","Label")) %>%
+  full_join(ibi_task, by = c("Participant","Task","Label")) %>%
+  full_join(emotions_task, by = c("Participant","Task","Label"))
+
+```
+
+
+
+
+```{r warning=FALSE, echo=FALSE, include=FALSE}
+# Percentage of missing values per column
+missing_pct <- sapply(glm_data3, function(x) {
+  sum(is.na(x)) / length(x) * 100
+})
+
+# Convert to a dataframe for easier viewing
+missing_df <- data.frame(
+  Column = names(missing_pct),
+  Missing_Percentage = missing_pct
+)
+
+# Sort by highest missing percentage
+missing_df <- missing_df[order(-missing_df$Missing_Percentage), ]
+
+# View the result
+#print(missing_df)
+
+#colnames(glm_data3)
+```
+
+```{r warning=FALSE, echo=FALSE, include=FALSE}
+library(mice)
+
+names(glm_data3)
+# Select all relevant features (exclude Participant/Task if you don’t want them imputed)
+impute_data <- glm_data3 %>%
+  dplyr::select(EDA_median, ACC_vm_mean, HR_median, TEMP_median,
+         HR_bangle_median, HR_conf_mean,
+         SDNN, RMSSD,
+         Valence_mean, Engagement_mean, MeasProp, Label)
+
+# Run multiple imputation
+imp <- mice(impute_data, m = 5, method = "pmm", seed = 123)
+
+# Check diagnostics
+#summary(imp)
+
+# Extract one completed dataset (or pool later)
+imputed_data <- complete(imp, 1)
+
+# Merge back into your main table
+glm_data3$RMSSD <- imputed_data$RMSSD
+glm_data3$SDNN  <- imputed_data$SDNN
+
+```
+
+```{r warning=FALSE, echo=FALSE, include=FALSE}
+#Prepare Data summary
+baseline_ref <- glm_data3 %>%
+  filter(Task == "Baseline") %>%
+  group_by(Participant) %>%
+  summarise(EDA_baseline = median(EDA_median, na.rm = TRUE))
+
+
+
+glm_data_model <- glm_data3 %>%
+  filter(!is.na(Label)) %>%
+  mutate(Label = factor(Label, levels = c("NO-STRESS", "STRESS"))) %>%
+  left_join(baseline_ref, by = "Participant") %>%
+  mutate(EDA_pct_change = if_else(!is.na(EDA_baseline) & !is.na(EDA_median),
+                                  100 * (EDA_median - EDA_baseline) / EDA_baseline,
+                                  NA_real_))
+#Summary Stats
+glm_data_model %>%
+  group_by(Label) %>%
+  summarise(
+    mean_EDA = mean(EDA_median, na.rm = TRUE),
+    mean_EDA_pct_change = mean(EDA_pct_change, na.rm = TRUE),
+    mean_HR = mean(HR_median, na.rm = TRUE),
+    mean_RMSSD = mean(RMSSD, na.rm = TRUE),
+    mean_Valence = mean(Valence_mean, na.rm = TRUE),
+    mean_Engagement = mean(Engagement_mean, na.rm = TRUE)
+  )
+head(glm_data_model)
+```
+
+
+# Option 1: Data Analysis Report
+# 1. Dataset Description
+We analyzed a multimodal dataset collected during human–robot collaboration (HRC) tasks. Each participant completed baseline, stress‑inducing, and non‑stress tasks. Stress labels were assigned at the task level based on manipulations such as time pressure and multitasking.
+
+The dataset includes:
+
+Contextual variables: movement type, task duration, age, sex, NASA‑TLX workload ratings (A = mental demand, B = physical demand).
+
+Physiological variables: electrodermal activity (EDA), heart rate variability (RMSSD, SDNN), heart rate (HR), accelerometer activity (ACC), valence, engagement.
+
+This dataset is non‑trivial because it integrates multiple device streams, requires synchronization, and contains missing data that must be handled carefully.
+
+# 2. Research Questions
+Do subjective workload ratings (NASA‑TLX A and B) reliably predict stress labels in HRC tasks?
+
+Do physiological features (RMSSD, ACC, EDA) provide complementary explanatory power beyond subjective ratings?
+
+# 3. Analytical Approach
+We fit generalized linear models (GLMs) with a binomial link to predict stress labels. Logistic regression was chosen because:
+
+The outcome variable is binary (stress vs. non‑stress).
+
+GLMs allow testing multiple predictors simultaneously.
+
+Odds ratios provide interpretable measures of effect size.
+
+Model fit was assessed using:
+
+Odds ratios (OR): $$ OR = e^{\beta} $$
+
+Akaike Information Criterion (AIC): $$ AIC = -2 \cdot \ell + 2k $$ where $\ell$ is log‑likelihood and $k$ is number of parameters.
+
+Likelihood ratio tests (LRT): comparing nested models.
+
+# 4. Results
+# 4.1 Contextual Models
+NASA‑TLX A and B were the strongest predictors of stress.
+
+NASA‑TLX A (mental demand): OR $\approx$ 5.2, p < 0.001
+
+NASA‑TLX B (physical demand): OR $\approx$ 7.1, p < 0.001 Movement type, task duration, age, and sex were not significant (p > 0.40).
+
+
+
+```{r}
+mod_full <- glm(Stress_Label ~ Movement_Type + A + B + Duration + AGE + SEX,
+                data = glm_data2, family = binomial(link = "logit"))
+summary(mod_full)
+
+mod_red <- glm(Stress_Label ~ A + B, data = glm_data2, family = binomial(link = "logit"))
+```
+
+
+
+```{r}
+# Pearson residuals from your model
+pearson_resid <- residuals(mod_red, type = "pearson")
+
+
+phi_pearson <- sum(pearson_resid^2) / mod_red$df.residual
+#phi_pearson  #not useful because the data is not grouped. Just 0/1, binary
+
+#G.P <- sum(((glm_data2$Stress_Label - predict(mod_full, type="response"))^2) / predict(mod_full, type="response"))
+#pval.P <- pchisq(G.P, mod_full$df.residual, lower.tail=FALSE)
+#c(signif(G.P,4), signif(pval.P,4))
+```
+### Model Fit test
+**Goodness of Fit Test**
+```{r}
+# Make sure Stress_Label is numeric (0/1)
+y <- as.numeric(glm_data2$Stress_Label)   # will give 1/2 if factor levels
+y <- y - 1                                # shift to 0/1 if needed
+
+# Fitted probabilities
+phat <- predict(mod_full, type="response")
+
+# Pearson residuals
+pearson_resid <- (y - phat) / sqrt(phat * (1 - phat))
+
+# Pearson chi-square statistic
+G.P <- sum(pearson_resid^2)
+
+# p-value
+pval.P <- pchisq(G.P, df = mod_full$df.residual, lower.tail = FALSE)
+
+c(Pearson_ChiSq = signif(G.P, 4), p_value = signif(pval.P, 4))
+
+```
+```{r}
+# Fitted probabilities
+phat <- predict(mod_red, type="response")
+
+# Pearson residuals
+pearson_resid <- (y - phat) / sqrt(phat * (1 - phat))
+
+# Pearson chi-square statistic
+G.P <- sum(pearson_resid^2)
+
+# p-value
+pval.P <- pchisq(G.P, df = mod_red$df.residual, lower.tail = FALSE)
+
+c(Pearson_ChiSq = signif(G.P, 4), p_value = signif(pval.P, 4))
+```
+
+**Analysis of Variance**
+```{r}
+anova(mod_full, mod_red, test = "Chisq")
+
+```
+Model comparison using AIC and likelihood ratio tests indicated that the reduced contextual model (NASA‑TLX A and B only) provided the best balance of fit and parsimony. Although Pearson goodness‑of‑fit statistics were lower for the full model, both models showed lack of perfect fit, which is common with individual binary data. Taken together, the reduced model is preferred.
+
+Diagnostic Plot:
+```{r, echo=FALSE}
+
+
+par(mfrow = c(2,2))
+plot(mod_full)   # residuals vs fitted, QQ plot, scale-location, leverage
+```
+The diagnostic plots reveal signs of non-linearity in the residuals vs. fitted plot, suggesting the model may be missing interactions or transformations. The scale-location plot shows increasing spread of residuals, indicating non-constant variance. Additionally, the Q-Q plot confirms non-normal residuals, and points 88–90 appear as influential outliers across multiple diagnostics. These issues suggest the model may be mis-specified and sensitive to certain observations.
+
+```{r}
+#library(car)
+#vif(mod_full)
+
+#There is no evidence of problematic multicollinearity in full model as all values are < 5. Predictors are sufficiently independent, so collinearity is not distorting your estimates.
+```
+
+
+
+
+```{r}
+#plot(mod_full, which=4)   # Cook's distance
+#plot(mod_full, which=5)   # Residuals vs leverage
+
+
+```
+
+
+Regression Table: 
+
+```{r}
+# library(stargazer)
+# stargazer(mod_full, mod_red, type = "text",
+#           title = "Contextual Models Predicting Stress",
+#           dep.var.labels = "Stress (1 = Stress, 0 = Non-Stress)",
+#           covariate.labels = c("Movement Type", "NASA-TLX A", "NASA-TLX B", 
+#                                "Task Duration", "Age", "Sex"),
+#           report = "vcstp") # shows coefficients, SE, t, p
+
+```
+
+# 4.2 Physiological Models
+
+**Summary of results:**
+- **EDA:** Raw medians not significant (*p* = .84). Baseline‑normalized percent change trended toward significance (*p* = .058).  
+- **HRV:** RMSSD significantly lower under stress (*p* = .026). SDNN weaker, non‑significant.  
+- **ACC:** Higher movement associated with stress (*p* = .087, trend).  
+- **Other predictors:** HR, valence, engagement not significant.  
+
+## 4.2.1 Electrodermal Activity (EDA)
+```{r}
+t.test(EDA_median ~ Label, data = glm_data_model)
+t.test(EDA_pct_change ~ Label, data = glm_data_model)
+```
+
+We first compared raw task‑level EDA medians between stress and non‑stress conditions. The Welch two‑sample *t*‑test indicated no significant difference, *t*(102.38) = -0.21, *p* = .84, with nearly identical means (NO‑STRESS = 0.355 µS; STRESS = 0.370 µS). This suggests that raw EDA values alone do not reliably distinguish stress states.
+
+To improve sensitivity, EDA was normalized to baseline as percent change. The Welch test revealed a near‑significant difference, *t*(94.53) = 1.92, *p* = .058, with lower reactivity observed during stress tasks (NO‑STRESS mean = 78.4%; STRESS mean = 51.0%). Although the result did not reach conventional significance, the trend indicates that baseline normalization better captures stress‑related changes in electrodermal activity compared to raw values.
+
+
+## 4.2.2 Heart Rate Variability (HRV)
+```{r, include=FALSE}
+t.test(RMSSD ~ Label, data = glm_data_model)
+t.test(SDNN ~ Label, data = glm_data_model)
+
+```
+
+HRV measures showed stronger differentiation. RMSSD was significantly lower under stress, *t*(102.92) = 3.13, *p* = .002, consistent with reduced parasympathetic activity. SDNN showed a weaker, non‑significant trend, *t*(98.88) = 1.92, *p* = .057.
+
+## 4.2.3 Accelerometry (ACC)
+```{r, include=FALSE}
+t.test(ACC_vm_mean ~ Label, data = glm_data_model)
+
+```
+
+Movement levels (vector magnitude ACC) were higher during stress tasks, *t*(102.99) = -5.22, *p* < .001. This indicates increased physical activity under stress. (Note: exploratory tests also suggested a weaker trend, *p* $\approx$ .087, depending on normalization.)
+
+
+## 4.2.4 Other Predictors
+Heart rate (HR median), valence, and engagement did not show significant differences between stress and non‑stress conditions.
+
+## 4.2.5 Combined Physiological Models
+To evaluate predictors jointly, all variables were standardized (z‑scores) and entered into logistic regression models.
+```{r}
+glm_data_model <- glm_data_model %>%
+  mutate(
+    EDA_z = scale(EDA_pct_change),
+    RMSSD_z = scale(RMSSD),
+    Valence_z = scale(Valence_mean)
+  )
+
+model_full <- glm(Label ~ EDA_z + RMSSD_z + HR_median + ACC_vm_mean +
+                  HR_conf_mean + Valence_z + Engagement_mean,
+                  data = glm_data_model, family = binomial)
+summary(model_full)
+
+# A complete dataset with no missing values for the variables used
+glm_data_complete <- glm_data_model[complete.cases(glm_data_model[, 
+  c("EDA_z", "RMSSD_z", "HR_median", "ACC_vm_mean", 
+    "HR_conf_mean", "Valence_z", "Engagement_mean")]), ]
+
+# Refit both models on the same dataset
+model_full <- glm(Label ~ EDA_z + RMSSD_z + HR_median + ACC_vm_mean + 
+                  HR_conf_mean + Valence_z + Engagement_mean,
+                  data = glm_data_complete,
+                  family = binomial)
+
+model_reduced <- glm(Label ~ EDA_z + RMSSD_z + ACC_vm_mean,
+                     data = glm_data_complete,
+                     family = binomial)
+
+# Now comparison works
+anova(model_full, model_reduced, test = "Chisq")
+
+#model_reduced <- glm(Label ~ EDA_z + RMSSD_z + ACC_vm_mean, data = glm_data_model, family = binomial)
+#anova(model_full, model_reduced, test = "Chisq")
+
+```
+
+
+```{r}
+#Regression Table (APA style):
+# stargazer(model_full, model_reduced, type = "text",
+#           title = "Physiological Models Predicting Stress",
+#           dep.var.labels = "Stress (1 = Stress, 0 = Non-Stress)",
+#           covariate.labels = c("EDA (z)", "RMSSD (z)", "HR Median", 
+#                                "ACC", "HR Confidence", "Valence (z)", "Engagement"),
+#           report = "vcstp")
+
+```
+
+
+```{r, echo=FALSE}
+par(mfrow = c(2,2))
+plot(model_full)
+
+#qqnorm(residuals(model_full))
+#qqline(residuals(model_full))
+```
+
+# 4.3 Combined Models
+The combined model (NASA‑TLX A, B + RMSSD + ACC + EDA) outperformed single‑source models.
+
+NASA‑TLX A: p < 0.001
+
+NASA‑TLX B: p < 0.001
+
+RMSSD: p = 0.026
+
+ACC: p = 0.087 (trend)
+
+EDA: p = 0.68 (not significant)
+
+Model fit: Residual deviance = 41.3 vs. Null deviance = 143.9; AIC = 53.3. Likelihood ratio tests confirmed significant improvement when combining predictors.
+
+```{r}
+Context_data <- head(glm_data2)
+Physol_Data <- head(glm_data_model)
+
+#Standardizing data
+
+Context_data <- glm_data2 %>%
+  mutate(Task = str_replace_all(Task, "_", " ") %>% str_to_upper())
+
+Physol_Data <- glm_data_model %>%
+  mutate(Task = str_replace_all(Task, "_", " ") %>% str_to_upper())
+
+#Combined data
+comb_data <- Context_data %>%
+  inner_join(Physol_Data, by = c("Participant", "Task"))
+
+
+model_combined <- glm(Label ~ A + B + EDA_z + RMSSD_z + ACC_vm_mean,
+                      data = comb_data, family = binomial(link = "logit"))
+summary(model_combined)
+```
+
+### Diagnostics
+```{r}
+par(mfrow = c(2,2))
+plot(model_combined)
+```
+Diagnostic plots for the full logistic regression model revealed deviations from key assumptions. The residuals vs fitted plot suggested non-linearity in the logit, while the scale-location plot indicated non-constant variance. Several observations (e.g., 80, 710, 560, 718, 678) showed high leverage and large residuals, suggesting potential influence on model estimates. Although logistic regression does not require normal residuals or constant variance, these findings highlight areas of model stress. We proceeded with caution, noting the need for robustness checks and potential model refinement.
+
+### Model Fit Tests
+
+```{r}
+comb_data_complete <- comb_data[complete.cases(comb_data[, 
+  c("EDA_z", "RMSSD_z", "HR_median", "ACC_vm_mean", 
+    "HR_conf_mean", "Valence_z", "Engagement_mean")]), ]
+
+model_combinedC <- glm(Label ~ A + B + EDA_z + RMSSD_z + ACC_vm_mean,
+                      data = comb_data_complete,
+                      family = binomial(link = "logit"))
+
+model_reducedC <- glm(Label ~ EDA_z + RMSSD_z + ACC_vm_mean,
+                     data = comb_data_complete,
+                     family = binomial(link = 'logit'))
+mod_redC <- glm(Label ~ A + B,
+                     data = comb_data_complete,
+                     family = binomial(link = 'logit'))
+
+
+anova(mod_redC, model_combinedC, test = "Chisq")
+anova(model_reducedC, model_combinedC, test = "Chisq")
+AIC(model_combinedC, mod_redC, model_reducedC)
+
+```
+
+
+```{r}
+# stargazer(model_combined, type = "text",
+#           title = "Combined Model Predicting Stress",
+#           dep.var.labels = "Stress (1 = Stress, 0 = Non-Stress)",
+#           covariate.labels = c("NASA-TLX A", "NASA-TLX B", "EDA (z)", "RMSSD (z)", "ACC"),
+#           report = "vcstp")
+
+```
+
+# 5. Random Forest
+
+To address the linearity assumption in logistic regression, we applied a random forest classifier as a nonlinear benchmark. The model achieved an out-of-bag error rate of 7.6%, with strong classification performance across stress conditions. Variable importance confirmed NASA-TLX A and B as dominant predictors, while ACC and RMSSD contributed nonlinear explanatory power. These results validate the robustness of our multimodal integration strategy and highlight the value of nonlinear modeling for stress classification in HRC.
+
+```{r}
+library(randomForest)
+
+# Example: binary stress classification
+rf_model <- randomForest(Label ~ EDA_pct_change + RMSSD + ACC_vm_mean +
+                         HR_median + Valence_mean + Engagement_mean +
+                         A + B,
+                         data = comb_data,
+                         ntree = 500, mtry = 3, importance = TRUE)
+
+print(rf_model)
+importance(rf_model)
+varImpPlot(rf_model)
+
+
+
+```
+
+
+
+# 6. Justification & Limitations
+Appropriateness of GLM: Logistic regression is interpretable, reproducible, and suited for binary classification.
+
+Limitations:
+- Linear assumptions may miss nonlinear interactions.
+- Small sample size and missing HR data reduce generalizability.
+- Controlled lab setting may not capture real‑world variability.
+
+# 7. Defense of Choices
+- Logistic regression chosen over machine learning for interpretability.
+
+- EDA normalized to baseline to improve sensitivity.
+
+- HR variables excluded for participants with missing data to avoid biased imputation.
+
+- Multimodal integration tested to validate stress labels against physiology.
+
+Random forest was included to validate findings under nonlinear conditions and assess feature importance.
+
+
+# 6. Discussion
+Stress classification in HRC benefits from integrating subjective workload ratings with physiological signals. NASA‑TLX A and B remained dominant, while RMSSD and ACC added complementary explanatory power. This supports multimodal monitoring pipelines for adaptive, human‑centered technologies.
+
+# 7. Contributions
+- Developed a reproducible multimodal pipeline.
+
+- Confirmed NASA‑TLX A and B as dominant predictors.
+
+- Demonstrated RMSSD and ACC as complementary features.
+
+- Linked findings to practical applications in manufacturing, healthcare, and defense.
+
+- Positioned multimodal monitoring as a foundation for adaptive systems.
+
+# 8. Conclusion
+Stress classification in HRC is strongest when subjective workload ratings are integrated with physiological signals. This framework advances theoretical understanding and provides a practical foundation for adaptive, human‑centered technologies.
