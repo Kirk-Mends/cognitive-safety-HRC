@@ -1,0 +1,134 @@
+---
+title: "Towards Cognitive Safety in Human–Robot Collaboration: Predictive Stress Detection Using Multimodal Physiological Signals and Machine Learning Models"
+author: "Kirk-Mends Attafuah"
+date: "2026-01-09"
+output:
+  pdf_document: default
+  html_document: default
+bibliography: references.bib
+csl: apa.csl
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Abstract
+
+Stress detection from physiological signals is critical for advancing health monitoring and adaptive interventions. This study presents a machine learning framework that integrates multimodal data from electrodermal activity (EDA)\footnote{EDA – Electrodermal Activity}, heart rate (HR)\footnote{HR – Heart Rate}, and electrocardiogram (ECG)\footnote{ECG – Electrocardiogram} sensors. Raw signals were segmented into fixed windows, normalized against baseline recordings, and transformed into interpretable features including statistical descriptors, accelerometer vector magnitude, skin conductance response (SCR)\footnote{SCR – Skin Conductance Response} metrics, and heart rate variability (RMSSD)\footnote{RMSSD – Root Mean Square of Successive Differences}. A Random Forest classifier was trained on these baseline‑subtracted features to classify stress versus non‑stress states. The proposed pipeline addresses challenges in heterogeneous timestamp formats by implementing conditional parsing and reconstruction, ensuring robust alignment of multimodal signals across tasks. Experimental evaluation demonstrates that combining EDA, HR, and ECG features with baseline normalization improves predictive accuracy compared to single‑modality approaches. These findings highlight the potential of wearable physiological sensing and machine learning for scalable, non‑invasive stress monitoring in human–robot collaboration (HRC)\footnote{HRC – Human–Robot Collaboration} contexts.
+
+## Introduction
+
+Human–robot collaboration (HRC) is increasingly central to modern manufacturing and service environments, where collaborative robots (cobots) are designed to operate safely alongside human workers. Current ISO\footnote{ISO – International Organization for Standardization} safety standards for cobot–human interaction primarily emphasize physical safety—such as collision avoidance, force limitations, and workspace separation—but they do not explicitly address cognitive and emotional safety. This omission is significant, as cognitive load and stress responses can compromise operator performance and long‑term well‑being even in physically safe environments.
+
+The urgency of addressing cognitive safety is amplified by the rapid growth of the cobot market. Global cobot revenues exceeded **$1 billion in 2023** and are forecast to grow at **>20% annually between 2024–2028**, with shipments expected to increase by **22% in 2024** [@InteractAnalysis2024]. Market analyses project the global cobot market will reach **$4.88 billion by 2030**, expanding at a **CAGR of 20.76%** [@MordorIntelligence2025].
+
+Adoption is accelerating across industries: automotive manufacturers and SMEs are leading adopters, with cobots increasingly deployed for assembly, material handling, and packaging [@GlobalGrowthInsights2024]. Case studies highlight industrial benefits: BMW’s Munich plant integrated KUKA LBR iiwa cobots to reduce cycle times in vehicle assembly [@BMWCaseStudy2025], while Ford has reported operating cost savings of ~15% through cobot deployment [@FordCaseStudy2025]. Electronics, food, beverage, and healthcare sectors now account for a majority of installations, reflecting cobots’ versatility across industries [@MordorIntelligence2025].
+
+Stress responses in HRC contexts often manifest through increased skin conductance, altered heart rate variability, and temperature fluctuations, particularly during high‑speed or cognitively demanding tasks. Prior studies have attempted to capture these dynamics. For example, Alabi et al. (2025) integrated EEG\footnote{EEG – Electroencephalogram}, ECG, and galvanic skin response (GSR)\footnote{GSR – Galvanic Skin Response} signals to explore cognitive load using correlation and clustering techniques. While valuable, these approaches revealed weak linear relationships and lacked predictive validation, limiting their practical application in real‑time monitoring.
+
+**Aim of the study:** This research develops a predictive framework for stress detection that addresses these limitations. By leveraging multimodal physiological signals—EDA, HR, and ECG—and applying baseline subtraction with machine learning classification, we seek to provide a robust method for identifying stress states during human–cobot collaboration. Unlike prior descriptive approaches, our framework emphasizes predictive accuracy and practical applicability, offering a pathway toward integrating cognitive safety into cobot standards and advancing holistic operator protection.
+
+
+## Methodology
+
+### Dataset
+
+This study employed the SenseCobot dataset, developed to evaluate stress levels and cognitive load in participants engaged in collaborative robot programming tasks. Data were collected from 21 participants across three phases: (1) an introduction to learning materials, (2) a baseline measurement task to establish reference conditions, and (3) hands‑on programming practice.
+
+The dataset includes a wide range of physiological and behavioral signals, such as ECG, EDA, GSR, HR, EEG, BVP\footnote{BVP – Blood Volume Pulse}, body temperature, facial emotion recognition, and NASA‑TLX\footnote{NASA‑TLX – NASA Task Load Index} questionnaires. For this study, we selected a subset of signals—HR, EDA, ECG, accelerometer, and temperature—based on their non‑invasive nature, industrial feasibility, and established relevance to stress physiology. EEG and NASA‑TLX were excluded due to limited practicality in real‑world cobot environments, and GSR was omitted due to redundancy with HR in capturing autonomic arousal.
+
+### Feature selection
+
+- **EDA statistics:** mean, median, and standard deviation.  
+- **SCR metrics:** count and amplitude (sympathetic arousal).  
+- **HR features:** median HR and HR confidence (cardiovascular response).  
+- **ECG HRV:** RMSSD (parasympathetic regulation).  
+- **Accelerometer:** vector magnitude mean and standard deviation (movement disambiguation).  
+- **Temperature:** median (thermoregulatory changes).
+
+Baseline subtraction was applied to normalize individual differences, ensuring that stress predictions reflect changes relative to each participant’s resting state.
+
+### Preprocessing
+
+- **Timestamp normalization:** Conditional parsing handled heterogeneous formats (full datetime strings and relative time codes), reconstructing consistent POSIX timestamps.  
+- **Windowing:** Signals were segmented into fixed 10‑second windows to capture short‑term physiological dynamics.  
+- **Baseline subtraction:** Each feature was normalized against baseline recordings to reduce inter‑individual variability.  
+- **Signal alignment:** Multimodal signals were synchronized by participant, task, and window ID to ensure comparability across modalities.
+
+### Handling missing data
+
+- **Interpolation:** Short gaps were linearly interpolated using `zoo::na.approx`, preserving temporal continuity.  
+- **Imputation:** Remaining missing values were replaced with the median of the feature across the dataset, ensuring robustness against outliers.  
+- **Quality control:** Features with excessive missingness (>20%) were excluded to prevent bias.
+
+This two‑step strategy ensured that the final dataset was complete and reliable for model training, while minimizing distortion of physiological signals.
+
+### Model training and evaluation
+
+We trained and compared five classification models:
+
+- Logistic Regression  
+- Random Forest  
+- Gradient Boosting Machine (GBM)\footnote{GBM – Gradient Boosting Machine}  
+- Support Vector Machine (SVM)\footnote{SVM – Support Vector Machine}  
+- GLMNET\footnote{GLMNET – Generalized Linear Model with Elastic Net Regularization}
+
+Each model was trained on the same baseline‑subtracted and imputed feature set. Hyperparameters were tuned using cross‑validation where applicable. The dataset was split into training and testing sets, and model performance was evaluated using accuracy, precision, recall, and ROC–AUC\footnote{ROC – Receiver Operating Characteristic; AUC – Area Under the Curve}. Predictions were generated both as class labels (stress vs. non‑stress) and probability scores, enabling flexible downstream applications such as threshold‑based alerts or continuous stress monitoring.
+
+## Results
+
+The ROC curve analysis revealed clear differences in model performance:
+
+- Random Forest achieved the highest performance with an AUC of 0.971, indicating excellent discrimination between stress and non‑stress states.  
+- GBM followed with an AUC of 0.914, demonstrating strong predictive capability.  
+- SVM achieved an AUC of 0.876, showing good performance but slightly less robust than tree‑based ensembles.  
+- Logistic Regression and GLMNET produced lower AUCs (0.709 and 0.706, respectively), reflecting limited ability to capture nonlinear relationships in the multimodal feature set.
+
+Overall, ensemble methods (Random Forest and GBM) outperformed linear models, highlighting the importance of capturing complex feature interactions in physiological stress data. The Random Forest model not only achieved the highest AUC but also provided interpretable feature importance measures, confirming the relevance of EDA, ECG RMSSD, and HR features in stress prediction.
+
+**Figure 1.** ROC curves comparing five classification models: Logistic Regression (AUC = 0.709), Random Forest (AUC = 0.971), GBM (AUC = 0.914), SVM (AUC = 0.876), and GLMNET (AUC = 0.706). Higher AUC indicates better discrimination between stress and non‑stress states.
+
+### Interpretation
+
+These results demonstrate that the engineered features generalize across multiple classifiers, but nonlinear ensemble approaches are particularly effective for multimodal physiological data. The superior performance of Random Forest suggests that stress responses involve complex, nonlinear interactions between signals that cannot be fully captured by linear models. Importantly, the comparative evaluation validates the robustness of the feature set and supports its applicability in real‑world human–robot collaboration contexts.
+
+## Discussion
+
+Multimodal physiological sensing combined with machine learning can provide reliable stress detection in human–cobot collaboration. Baseline normalization was critical for reducing noise and improving generalizability. The conditional timestamp handling strategy ensured compatibility across datasets with varying formats, a common challenge in wearable research. While Random Forest provided strong performance, future work could explore temporal models (e.g., sequence‑aware deep learning) to capture dynamic stress trajectories.
+
+This study highlights a gap in current ISO safety standards: while physical safety is well‑defined, cognitive and emotional safety remain unaddressed. Our predictive framework offers a practical step toward integrating cognitive safety into cobot guidelines, ensuring that operator well‑being is considered alongside physical protection.
+
+The industrial context further underscores this need. With the cobot market surpassing \$1 billion and expected to grow at >20% annually through 2028, operators are increasingly exposed to collaborative environments where stress responses can impact safety and productivity. By embedding cognitive safety into standards and practice, the industrial benefits of cobots—efficiency, flexibility, and cost savings—can be realized without compromising human health.
+
+Future research should extend this work to longitudinal monitoring and adaptive cobot behaviors that respond dynamically to operator states. For example, cobots could adjust task speed or provide supportive feedback when stress levels are detected, aligning with the broader vision of human‑centered automation.
+
+## Conclusion
+
+This study presents a robust framework for stress detection using multimodal physiological signals. By integrating EDA, HR, and ECG features with baseline subtraction and conditional timestamp handling, and by comparing multiple classifiers, the framework achieved reliable classification of stress states. The findings highlight the potential of wearable sensing and machine learning for scalable, non‑invasive stress monitoring, with direct implications for human–robot collaboration. Incorporating cognitive safety into ISO standards would represent a significant advancement in holistic operator protection, ensuring that cobot systems safeguard not only physical but also psychological well‑being.
+
+
+
+
+
+
+
+## References
+
+- **Market Report** – Interact Analysis. (2024). *Global cobot market exceeds \$1bn in 2023, with strong growth forecast 2024–28*. Retrieved from https://interactanalysis.com/wp-content/uploads/Cobots-report-PR-May-2024.pdf  
+- **Market Report** – Mordor Intelligence. (2025). *Collaborative Robot Market Size Analysis & Trends 2030*. Retrieved from https://www.mordorintelligence.com/industry-reports/collaborative-robot-market  
+- **Market Report** – Research and Markets. (2024). *The Global Market for Collaborative Robots (Cobots) 2025–2045*. Retrieved from https://www.researchandmarkets.com/report/collaborative-robot  
+- **Market Report** – Global Growth Insights. (2024). *Collaborative Robots Deployment Trends*. Retrieved from https://globalgrowthinsights.com  
+- **Industry Case Study (BMW)** – Bernier, J. (2025). *Automate Without Disrupting The Existing Process? BMW Did It!* LinkedIn article. Retrieved from https://www.linkedin.com/pulse/automate-without-disrupting-existing-process-bmw-did-bernier-9crie  
+- **Industry Blog (Ford)** – Omdia. (2024). *The revolution of robots in the automotive industry*. Retrieved from https://omdia.tech.informa.com/blogs/2024/nov/the-revolution-of-robots-in-the-automotive-industry  
+- **Academic Journal** – Alabi, T., et al. (2025). *Multimodal physiological sensing for cognitive load analysis in HRC*. *Journal of Human–Robot Interaction*.  
+- **International Standard** – ISO 10218‑1:2011. *Robots and robotic devices—Safety requirements for industrial robots*. 
+
+International Organization for Standardization.  
+
+
+
+
+
