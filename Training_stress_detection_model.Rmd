@@ -1,0 +1,666 @@
+---
+title: "Data Analysis 2"
+author: "Kirk-Mends Attafuah"
+date: "2025-12-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+
+library(data.table)  # fread, rbindlist
+library(dplyr)       # dplyr verbs
+library(stringr)     # str_extract, str_detect
+library(readr)       # read_csv
+library(pracma)      # findpeaks
+library(tidyr)       # pivoting if needed
+
+# ----------------------------
+# Config
+# ----------------------------
+base_folder <- "C:/Users/kirkm/Music/My research works/Engineering/SenseCobot/SenseCobot"
+
+# ============================
+# Helper functions
+# ============================
+
+# Parse filename into metadata
+parse_filename <- function(path) {
+  fname <- basename(path)
+  
+  # Detect baseline vs task
+  if (str_detect(fname, regex("Baseline", ignore_case = TRUE))) {
+    task_clean <- "Baseline"
+  } else {
+    task_clean <- str_extract(fname, regex("Task\\s*\\d+", ignore_case = TRUE))
+  }
+  
+  tibble(
+    file = path,
+    Participant = str_extract(fname, "P_\\d+"),   # captures P_02, P_03, … P_21
+    Task = task_clean
+  )
+}
+
+# Read file + attach metadata
+read_with_meta <- function(meta_row) {
+  df <- read_csv(meta_row$file, show_col_types = FALSE)
+  if ("Timestamp" %in% names(df)) {
+    df <- df %>% mutate(Timestamp = as.character(Timestamp))
+  }
+  df %>%
+    mutate(
+      Participant = meta_row$Participant,
+      Task = meta_row$Task
+    )
+}
+
+
+# Process folder with metadata
+process_folder <- function(folder_path) {
+  files <- list.files(folder_path, pattern = "\\.csv$", full.names = TRUE)
+  if (length(files) == 0) return(tibble())
+  
+  meta <- bind_rows(lapply(files, parse_filename))
+  
+  all_data <- bind_rows(lapply(1:nrow(meta), function(i) {
+    row <- meta[i, ]
+    read_with_meta(as.list(row))
+  }))
+  
+  all_data
+}
+
+
+# ============================
+# RMSSD functions
+# ============================
+compute_rmssd_from_ecg <- function(ecg_signal, sampling_rate = 250) {
+  if (length(ecg_signal) < sampling_rate * 5) return(NA_real_)
+  z <- (ecg_signal - mean(ecg_signal, na.rm = TRUE)) / sd(ecg_signal, na.rm = TRUE)
+  peaks <- findpeaks(z,
+                     minpeakheight = 1.0,
+                     minpeakdistance = round(sampling_rate * 0.28))
+  if (is.null(peaks)) return(NA_real_)
+  r_peak_indices <- peaks[,2]
+  ibi <- diff(r_peak_indices) / sampling_rate
+  if (length(ibi) < 3) return(NA_real_)
+  sqrt(mean(diff(ibi)^2, na.rm = TRUE))
+}
+
+compute_rmssd_from_ibi <- function(ibi_vector) {
+  if (length(ibi_vector) < 3) return(NA_real_)
+  sqrt(mean(diff(ibi_vector)^2, na.rm = TRUE))
+}
+
+ibi_to_sdnn <- function(ibi_vector) sd(ibi_vector, na.rm = TRUE)
+ibi_to_mean_hr <- function(ibi_vector) mean(60 / ibi_vector, na.rm = TRUE)
+
+# ============================
+# Load raw data (industry realistic)
+# ============================
+eda_data <- process_folder(file.path(base_folder, "EDA_Empatica_Signals"))
+hr_data  <- process_folder(file.path(base_folder, "HR_Bangle_Signals"))
+ibi_data <- process_folder(file.path(base_folder, "IBI_Empatica_Signals"))
+ecg_data <- process_folder(file.path(base_folder, "ECG_Shimmer3_Signals"))
+
+# ============================
+# Aggregate features
+
+# Function to compute SCR features from EDA
+compute_scr_features <- function(eda_signal, min_height = 0.05, min_distance = 1) {
+  if (length(eda_signal) < 10) return(list(SCR_count = NA, SCR_mean_amp = NA))
+  
+  # Normalize or detrend if needed
+  eda_norm <- eda_signal - min(eda_signal, na.rm = TRUE)
+  
+  # Find peaks
+  peaks <- findpeaks(eda_norm,
+                     minpeakheight = min_height,
+                     minpeakdistance = min_distance)
+  
+  if (is.null(peaks)) {
+    return(list(SCR_count = 0, SCR_mean_amp = 0))
+  } else {
+    SCR_count <- nrow(peaks)
+    SCR_mean_amp <- mean(peaks[,1], na.rm = TRUE)  # peak heights
+    return(list(SCR_count = SCR_count, SCR_mean_amp = SCR_mean_amp))
+  }
+}
+
+   
+
+```
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+
+
+window_size <- 10  # seconds
+
+
+# Convert timestamps
+
+eda_data_1 <- eda_data %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+hr_data_1  <- hr_data  %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+ecg_data <- ecg_data %>% mutate(Timestamp = as.POSIXct(Timestamp,
+                                format = "%Y-%m-%d %H:%M:%OS",
+                                tz = "UTC"))
+
+
+# Add window IDs
+add_window_id <- function(df, window_size) {
+  df %>%
+    group_by(Participant, Task) %>%
+    mutate(
+      rel_time = as.numeric(difftime(Timestamp, min(Timestamp), units = "secs")),
+      window_id = floor(rel_time / window_size)
+    ) %>%
+    ungroup()
+}
+
+eda_data_1 <- add_window_id(eda_data, window_size)
+hr_data_1  <- add_window_id(hr_data, window_size)
+ecg_data_1 <- add_window_id(ecg_data, window_size)
+
+# Aggregate features per window
+
+# EDA features
+eda_task_1 <- eda_data_1 %>%
+  group_by(Participant, Task, window_id) %>%
+  summarise(
+    EDA_median_1   = median(EDA, na.rm = TRUE),
+    EDA_mean_1     = mean(EDA, na.rm = TRUE),
+    EDA_sd_1       = sd(EDA, na.rm = TRUE),
+    ACC_vm_mean_1  = mean(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+    ACC_vm_sd_1    = sd(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+    HR_median_1    = median(HR, na.rm = TRUE),
+    TEMP_median_1  = median(TEMP, na.rm = TRUE),
+    SCR_count_1    = compute_scr_features(EDA)$SCR_count,
+    SCR_mean_amp_1 = compute_scr_features(EDA)$SCR_mean_amp,
+    Label          = first(Label),
+    .groups = "drop"
+  )
+
+# HR features
+hr_task_1 <- hr_data_1 %>%
+  group_by(Participant, Task, window_id) %>%
+  summarise(
+    HR_bangle_median_1 = median(HR, na.rm = TRUE),
+    HR_conf_mean_1     = mean(Confidence, na.rm = TRUE),
+    Label              = first(Label),
+    .groups = "drop"
+  )
+
+# ECG features
+ecg_task_1 <- ecg_data_1 %>%
+  group_by(Participant, Task, window_id) %>%
+  summarise(
+    RMSSD_ECG_1 = {
+      cols <- c("ECG LL-RA CAL","ECG LA-RA CAL","ECG Vx-RL CAL")
+      col_present <- cols[cols %in% names(cur_data_all())]
+      if (length(col_present) == 0) NA_real_
+      else {
+        sig <- unlist(cur_data_all()[, col_present[1]])
+        compute_rmssd_from_ecg(sig, sampling_rate = 250)
+      }
+    },
+    Label = first(Label),
+    .groups = "drop"
+  )
+
+
+# Merge all features
+
+all_features_1 <- eda_task_1 %>%
+  full_join(hr_task_1,  by = c("Participant", "Task", "window_id", "Label")) %>%
+  full_join(ecg_task_1, by = c("Participant", "Task", "window_id", "Label"))
+
+# table(baseline_task_2$window_id)
+#  table(all_features_2$window_id[all_features_2T$Task != "Baseline"])
+```
+
+```{r}
+ #sum(is.na(all_features_1$Label))
+```
+
+```{r}
+library(dplyr)
+
+all_features_2 <- all_features_1 %>%
+  group_by(Participant, Task) %>%
+  mutate(
+    Label = ifelse(Task == "Baseline", NA, first(na.omit(Label)))
+  ) %>%
+  ungroup()
+
+#View(all_features_2)
+
+ #sum(is.na(all_features_2$Label))
+```
+
+```{r}
+#Training data, vs Test Data
+
+library(dplyr)
+library(caret)
+library(zoo)
+library(forcats)
+
+# Baseline subset
+baseline_task_2 <- all_features_2 %>%
+  filter(Task == "Baseline")
+    # Inspect
+#print(baseline_rows)
+
+
+# Join baseline to task rows (only once!)
+glm_data_norm_2 <- all_features_2 %>%
+  filter(Task != "Baseline") %>%
+  left_join(baseline_task_2 %>% select(-Task),
+            by = c("Participant", "window_id"),
+            suffix = c("", "_baseline"))
+
+# Subtract baseline values
+glm_data_norm_2 <- glm_data_norm_2 %>%
+  mutate(
+    EDA_mean_delta    = EDA_mean_1    - EDA_mean_1_baseline,
+    EDA_median_delta  = EDA_median_1  - EDA_median_1_baseline,
+    EDA_sd_delta      = EDA_sd_1      - EDA_sd_1_baseline,
+    SCR_count_delta   = SCR_count_1   - SCR_count_1_baseline,
+    SCR_amp_delta     = SCR_mean_amp_1 - SCR_mean_amp_1_baseline,
+    HR_median_delta   = HR_median_1   - HR_median_1_baseline,
+    TEMP_median_delta = TEMP_median_1 - TEMP_median_1_baseline,
+    ACC_vm_mean_delta = ACC_vm_mean_1 - ACC_vm_mean_1_baseline,
+    ACC_vm_sd_delta   = ACC_vm_sd_1   - ACC_vm_sd_1_baseline,
+    HR_bangle_delta   = HR_bangle_median_1 - HR_bangle_median_1_baseline,
+    HR_conf_delta     = HR_conf_mean_1 - HR_conf_mean_1_baseline,
+    RMSSD_ECG_delta   = RMSSD_ECG_1   - RMSSD_ECG_1_baseline
+  ) 
+
+# Training data prep
+glm_model_data_2 <- glm_data_norm_2 %>%
+  select(Label, ends_with("_delta"))
+
+glm_model_data_interp_2 <- glm_model_data_2 %>%
+  mutate(across(ends_with("_delta"), ~ zoo::na.approx(.x, na.rm = FALSE))) %>%
+  mutate(across(ends_with("_delta"),
+                ~ ifelse(is.na(.x), median(.x, na.rm = TRUE), .x))) %>%
+  filter(!is.na(Label))
+
+# Fix Label factor levels
+glm_model_data_interp_2$Label <- forcats::fct_recode(glm_model_data_interp_2$Label,
+                                                     NOSTRESS = "NO-STRESS",
+                                                     STRESS   = "STRESS")
+
+
+# write.csv(glm_model_data_interp_2,
+#           "glm_model_data_interp_2.csv",
+#           row.names = FALSE)
+
+```
+
+
+```{r}
+# Train/test split
+set.seed(123)
+train_idx <- sample(seq_len(nrow(glm_model_data_interp_2)), size = 0.7 * nrow(glm_model_data_interp_2))
+train_data_2 <- glm_model_data_interp_2[train_idx, ]
+test_data_2  <- glm_model_data_interp_2[-train_idx, ]
+
+# Cross-validation setup
+ctrl_2 <- trainControl(method = "cv", number = 10,
+                       classProbs = TRUE,
+                       summaryFunction = twoClassSummary)
+```
+
+```{r}
+colnames(train_data_2)
+
+# Train logistic regression
+model_2 <- train(Label ~ ., 
+                 data = train_data_2,
+                 method = "glm",
+                 family = binomial,
+                 trControl = ctrl_2,
+                 metric = "ROC")
+
+print(model_2)
+summary(model_2)
+```
+
+```{r}
+#Reduced Model
+model_3 <- train(Label ~ EDA_mean_delta + EDA_median_delta + SCR_count_delta + TEMP_median_delta + HR_bangle_delta + RMSSD_ECG_delta, 
+                 data = train_data_2,
+                 method = "glm",
+                 family = binomial,
+                 trControl = ctrl_2,
+                 metric = "ROC")
+print(model_3)
+summary(model_3)
+
+```
+
+Random Forest
+
+```{r}
+model_rf_2 <- train(Label ~ ., 
+                  data = train_data_2,
+                  method = "rf",
+                  trControl = ctrl_2,
+                  metric = "ROC")
+print(model_rf_2)
+
+```
+
+Gradient Booster
+
+```{r}
+model_gbm_2 <- train(Label ~ ., 
+                   data = train_data_2,
+                   method = "gbm",
+                   trControl = ctrl_2,
+                   metric = "ROC",
+                   verbose = FALSE)
+print(model_gbm_2)
+
+```
+
+```{r}
+# library(caret)
+# library(xgboost)
+# X <- model.matrix(Label ~ . , data = train_data_2)[, -1]
+# y <- train_data_2$Label
+# 
+# train_df <- data.frame(Label = y, X)
+# 
+# model_xgb_2 <- train(
+#   Label ~ .,
+#   data = train_data_2,
+#   method = "xgbTree",
+#   trControl = ctrl_2,
+#   metric = "ROC",
+#   verbose = FALSE
+# )
+# 
+# print(model_xgb_2)
+
+```
+
+
+
+```{r}
+#Support Vector Machines (SVM)
+model_svm_2 <- train(Label ~ ., 
+                   data = train_data_2,
+                   method = "svmRadial",
+                   trControl = ctrl_2,
+                   metric = "ROC")
+print(model_svm_2)
+
+```
+
+```{r}
+#Regularized Logistic Regression (GLMNET)
+model_glmnet_2 <- train(Label ~ ., 
+                      data = train_data_2,
+                      method = "glmnet",
+                      trControl = ctrl_2,
+                      metric = "ROC")
+print(model_glmnet_2)
+
+```
+
+```{r}
+#XGBoost (Extreme Gradient Boosting)
+# model_xgb_2 <- train(Label ~ ., 
+#                    data = train_data_2,
+#                    method = "xgbTree",
+#                    trControl = ctrl_2,
+#                    metric = "ROC")
+# print(model_xgb)
+
+```
+
+Diagnostics
+
+```{r}
+library(caret)
+library(pROC)
+
+# Collect models into a list
+results <- resamples(list(
+  Logistic = model_2,
+  RF = model_rf_2,
+  GBM = model_gbm_2,
+  SVM = model_svm_2,
+  GLMNET = model_glmnet_2
+  #XGB = model_xgb
+))
+
+# Summary comparison
+summary(results)
+
+# Boxplot comparison of ROC
+bwplot(results, metric = "ROC")
+
+# -------------------------------
+# Plot ROC curves for each model
+# -------------------------------
+
+roc_log <- roc(response = test_data_2$Label,
+               predictor = predict(model_2, test_data_2, type = "prob")[, "STRESS"],
+               levels = c("NOSTRESS", "STRESS"))
+
+roc_rf <- roc(response = test_data_2$Label,
+              predictor = predict(model_rf_2, test_data_2, type = "prob")[, "STRESS"],
+              levels = c("NOSTRESS", "STRESS"))
+
+roc_gbm <- roc(response = test_data_2$Label,
+               predictor = predict(model_gbm_2, test_data_2, type = "prob")[, "STRESS"],
+               levels = c("NOSTRESS", "STRESS"))
+
+roc_svm <- roc(response = test_data_2$Label,
+               predictor = predict(model_svm_2, test_data_2, type = "prob")[, "STRESS"],
+               levels = c("NOSTRESS", "STRESS"))
+
+roc_glmnet <- roc(response = test_data_2$Label,
+                  predictor = predict(model_glmnet_2, test_data_2, type = "prob")[, "STRESS"],
+                  levels = c("NOSTRESS", "STRESS"))
+
+# roc_xgb <- roc(response = test_data_2$Label,
+#                predictor = predict(model_xgb, test_data, type = "prob")[, "STRESS"],
+#                levels = c("NOSTRESS", "STRESS"))
+
+# Plot all ROC curves together
+plot(roc_log, col = "blue", lwd = 2, main = "ROC Curves: Logistic, RF, GBM, SVM, GLMNET")
+plot(roc_rf, col = "red", lwd = 2, add = TRUE)
+plot(roc_gbm, col = "green", lwd = 2, add = TRUE)
+plot(roc_svm, col = "purple", lwd = 2, add = TRUE)
+plot(roc_glmnet, col = "orange", lwd = 2, add = TRUE)
+#plot(roc_xgb, col = "brown", lwd = 2, add = TRUE)
+
+# Add legend with AUC values
+legend("bottomright",
+       legend = c(
+         paste("Logistic (AUC =", round(auc(roc_log), 3), ")"),
+         paste("Random Forest (AUC =", round(auc(roc_rf), 3), ")"),
+         paste("GBM (AUC =", round(auc(roc_gbm), 3), ")"),
+         paste("SVM (AUC =", round(auc(roc_svm), 3), ")"),
+         paste("GLMNET (AUC =", round(auc(roc_glmnet), 3), ")")
+         #paste("XGB (AUC =", round(auc(roc_xgb), 3), ")")
+       ),
+       col = c("blue", "red", "green", "purple", "orange", "brown"),
+       lwd = 2)
+
+
+```
+
+Checking for F1, Precision and Recall
+
+```{r}
+library(caret)
+
+get_metrics <- function(model, test_data) {
+  
+  # Predicted class labels
+  preds_class <- predict(model, test_data)
+  
+  # Confusion matrix
+  cm <- confusionMatrix(preds_class, test_data$Label, positive = "STRESS")
+  
+  # Extract metrics
+  precision <- cm$byClass["Precision"]
+  recall    <- cm$byClass["Recall"]
+  f1        <- cm$byClass["F1"]
+  
+  data.frame(
+    Model = deparse(substitute(model)),
+    Precision = round(precision, 3),
+    Recall = round(recall, 3),
+    F1 = round(f1, 3)
+  )
+}
+
+```
+
+
+```{r}
+metrics_logistic <- get_metrics(model_2, test_data_2)
+metrics_rf       <- get_metrics(model_rf_2, test_data_2)
+metrics_gbm      <- get_metrics(model_gbm_2, test_data_2)
+metrics_svm      <- get_metrics(model_svm_2, test_data_2)
+metrics_glmnet   <- get_metrics(model_glmnet_2, test_data_2)
+metrics_logistic_reduced <- get_metrics(model_3, test_data_2)
+
+```
+
+
+```{r}
+all_metrics <- rbind(
+  metrics_logistic,
+  metrics_rf,
+  metrics_gbm,
+  metrics_svm,
+  metrics_glmnet,
+  metrics_logistic_reduced  # add if needed
+)
+
+print(all_metrics)
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+library(shiny)
+library(ggplot2)
+library(DT)
+
+# Load your trained Random Forest model
+# Make sure you have already run saveRDS(model_rf, "rf_model.rds") in Step 4
+saveRDS(model_rf_2, "rf_model.rds")
+model_rf <- readRDS("rf_model.rds")
+
+ui <- fluidPage(
+  titlePanel("Stress Prediction Dashboard"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h4("Manual Input (Single Participant)"),
+      numericInput("EDA_mean_delta", "EDA Mean Δ", value = 0),
+      numericInput("TEMP_median_delta", "Temp Median Δ", value = 0),
+      numericInput("HR_median_delta", "HR Median Δ", value = 0),
+      numericInput("ACC_vm_mean_delta", "ACC Mean Δ", value = 0),
+      numericInput("RMSSD_ECG_delta", "RMSSD ECG Δ", value = 0),
+      actionButton("predict", "Predict Stress"),
+      hr(),
+      
+      h4("Batch Prediction (CSV Upload)"),
+      fileInput("file", "Upload CSV File",
+                accept = c(".csv")),
+      helpText("CSV should contain columns: EDA_mean_delta, TEMP_median_delta, HR_median_delta, ACC_vm_mean_delta, RMSSD_ECG_delta")
+    ),
+    
+    mainPanel(
+      h3("Single Participant Prediction"),
+      textOutput("prediction"),
+      plotOutput("probPlot"),
+      hr(),
+      h3("Batch Predictions"),
+      DTOutput("batchTable")
+    )
+  )
+)
+
+server <- function(input, output) {
+  
+  # Single participant prediction
+  observeEvent(input$predict, {
+    newdata <- data.frame(
+      EDA_mean_delta = input$EDA_mean_delta,
+      TEMP_median_delta = input$TEMP_median_delta,
+      HR_median_delta = input$HR_median_delta,
+      ACC_vm_mean_delta = input$ACC_vm_mean_delta,
+      RMSSD_ECG_delta = input$RMSSD_ECG_delta,
+      Label = factor("NOSTRESS", levels = c("NOSTRESS", "STRESS"))
+    )
+    
+    prob <- predict(model_rf, newdata, type = "prob")
+    class <- predict(model_rf, newdata)
+    
+    output$prediction <- renderText({
+      paste("Predicted Class:", as.character(class))
+    })
+    
+    output$probPlot <- renderPlot({
+      df <- data.frame(Class = colnames(prob), Probability = as.numeric(prob[1,]))
+      ggplot(df, aes(x = Class, y = Probability, fill = Class)) +
+        geom_bar(stat = "identity") +
+        ylim(0,1) +
+        theme_minimal() +
+        ggtitle("Prediction Probabilities")
+    })
+  })
+  
+  # Batch prediction from CSV
+  observeEvent(input$file, {
+    req(input$file)
+    data <- read.csv(input$file$datapath)
+    
+    # Add dummy Label column to match training structure
+    data$Label <- factor("NOSTRESS", levels = c("NOSTRESS", "STRESS"))
+    
+    # Predict
+    classes <- predict(model_rf, data)
+    probs <- predict(model_rf, data, type = "prob")
+    
+    results <- cbind(data, Predicted_Class = classes, probs)
+    
+    output$batchTable <- renderDT({
+      datatable(results, options = list(pageLength = 10))
+    })
+  })
+}
+
+shinyApp(ui = ui, server = server)
+
+```
+
+```{r}
+shiny::runApp("app.R")
+
+```

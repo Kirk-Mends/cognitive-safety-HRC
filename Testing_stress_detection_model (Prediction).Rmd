@@ -1,0 +1,960 @@
+---
+title: "Test"
+author: "Kirk-Mends Attafuah"
+date: "2026-01-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(caret)
+library(zoo)
+library(forcats)
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+base_folder_T <- "C:/Users/kirkm/Music/My research works/Engineering/SenseCobot"
+
+eda_data_T <- process_folder(file.path(base_folder_T, "EDA_Empatica_Signals"))
+hr_data_T  <- process_folder(file.path(base_folder_T, "HR_Bangle_Signals"))
+ecg_data_T <- process_folder(file.path(base_folder_T, "ECG_Shimmer3_Signals"))
+
+```
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# -------------------------------
+# Step 1: Define window size
+# -------------------------------
+window_size <- 10  # seconds
+
+# -------------------------------
+# Step 2: Convert timestamps
+# -------------------------------
+eda_data_1T <- eda_data_T %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+hr_data_1T  <- hr_data_T  %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+
+```
+
+
+```{r}
+
+
+
+# Step 1: Copy dataset
+ecg_data_2T <- ecg_data_T
+
+# This is the code to test ------------------------------------
+
+# Baseline
+baseline_df <- ecg_data_2T %>%
+  filter(Task == "Baseline") %>%
+  mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+
+baseline_date <- as.Date(min(baseline_df$Timestamp, na.rm = TRUE))
+
+# Pick non-Baseline tasks
+tasks <- setdiff(unique(ecg_data_2T$Task), "Baseline")
+
+task_dfs <- list()
+
+for (t in tasks) {
+  task_rows <- sum(ecg_data_2T$Task == t)
+  task_start_raw <- ecg_data_2T %>%
+    filter(Task == t) %>%
+    slice(1) %>%
+    pull(Timestamp)
+  
+  if (is.character(task_start_raw)) {
+    # Case 1: relative format "MM:SS(.fraction)"
+    if (grepl("^\\d{1,2}:\\d{2}(\\.\\d+)?$", task_start_raw)) {
+      parts <- strsplit(task_start_raw, ":")[[1]]
+      minutes <- as.numeric(parts[1])
+      seconds <- as.numeric(parts[2])
+      start_time <- as.POSIXct(
+        paste(format(baseline_date, "%Y-%m-%d"), "00:00:00"),
+        tz = "UTC"
+      ) + (minutes * 60 + seconds)
+      
+      task_df <- ecg_data_2T %>%
+        filter(Task == t) %>%
+        mutate(Timestamp = start_time + seq(0, by = 1/sampling_rate, length.out = task_rows))
+      
+    } else {
+      # Case 2: full datetime string
+      task_df <- ecg_data_2T %>%
+        filter(Task == t) %>%
+        mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+    }
+    
+  } else {
+    # Already POSIXct
+    task_df <- ecg_data_2T %>%
+      filter(Task == t) %>%
+      mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+  }
+  
+  task_dfs[[t]] <- task_df
+}
+
+# Combine Baseline + all tasks
+ecg_data_3T <- bind_rows(baseline_df, dplyr::bind_rows(task_dfs))
+
+#----------------------
+
+
+
+# # Step 2: Parse Baseline timestamps (already full date + fractional seconds)
+# baseline_df <- ecg_data_2T %>%
+#   filter(Task == "Baseline") %>%
+#   mutate(
+#     Timestamp = as.POSIXct(
+#       Timestamp,
+#       format = "%Y-%m-%d %H:%M:%OS",
+#       tz = "UTC"
+#     )
+#   )
+
+
+# --------------------------------- This is for only Task 2 because the timestamp format is accurate
+# # Baseline
+# baseline_df <- ecg_data_2T %>%
+#   filter(Task == "Baseline") %>%
+#   mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+# 
+# # Non-baseline tasks: just parse directly
+# task_df <- ecg_data_2T %>%
+#   filter(Task != "Baseline") %>%
+#   mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+# 
+# # Combine
+# ecg_data_3T <- bind_rows(baseline_df, task_df)
+# --------------------------------------------------------------------------------------------
+
+
+
+
+# 
+# # Step 3: Get baseline date safely
+# baseline_date <- as.Date(min(baseline_df$Timestamp, na.rm = TRUE))
+# 
+# tasks <- unique(ecg_data_2T$Task)
+# task_name <- setdiff(tasks, "Baseline")[1]
+# 
+# # Step 4: Derive Task 5 start time from its first row
+# task_rows <- sum(ecg_data_2T$Task == task_name )
+# task_start_raw <- ecg_data_2T %>%
+#   filter(Task == "Task 1") %>%
+#   slice(1) %>%
+#   pull(Timestamp)
+# 
+# # Step 5: Normalize Task start string
+# if (is.character(task_start_raw)) {
+#   parts <- strsplit(task_start_raw, ":")[[1]]
+#   
+#   # Interpret "50:12:00" as 00h 50m 12s
+#   hours   <- 0
+#   minutes <- as.numeric(parts[1])
+#   seconds <- as.numeric(parts[2])
+#   
+#   # Build proper datetime string
+#   task_start <- as.POSIXct(
+#     paste(
+#       format(baseline_date, "%Y-%m-%d"),
+#       sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+#     ),
+#     format = "%Y-%m-%d %H:%M:%S",
+#     tz = "UTC"
+#   )
+# } else {
+#   task_start <- task_start_raw
+# }
+# 
+# # Step 6: Reconstruct Task 5 timestamps at 512 Hz
+# task_df <- ecg_data_2T %>%
+#   filter(Task == task_name) %>%
+#   mutate(
+#     Timestamp = task_start + seq(0, by = 1/512, length.out = task_rows)
+#   )
+# 
+# # Step 7: Final tidy dataset (combine Baseline + Task 5)
+# ecg_data_3T <- bind_rows(baseline_df, task_df)
+
+# --- Validation check ---
+ecg_data_3T %>%
+  group_by(Task) %>%
+  summarise(
+    min_time = min(Timestamp, na.rm = TRUE),
+    max_time = max(Timestamp, na.rm = TRUE),
+    duration = difftime(max_time, min_time, units = "mins"),
+    n_windows = n_distinct(
+      floor(as.numeric(difftime(Timestamp, min(Timestamp), units = "secs")) / 10)
+    )
+  )
+
+```
+
+
+```{r}
+# -------------------------------
+# Step 3: Add window IDs
+# -------------------------------
+add_window_id <- function(df, window_size) {
+  df %>%
+    group_by(Participant, Task) %>%
+    mutate(
+      rel_time = as.numeric(difftime(Timestamp, min(Timestamp), units = "secs")),
+      window_id = floor(rel_time / window_size)
+    ) %>%
+    ungroup()
+}
+
+eda_data_1T <- add_window_id(eda_data_T, window_size)
+hr_data_1T  <- add_window_id(hr_data_T, window_size)
+ecg_data_1T <- add_window_id(ecg_data_3T, window_size)
+
+# -------------------------------
+# Step 4: Aggregate features per window
+# -------------------------------
+
+# EDA features
+eda_task_T <- eda_data_1T %>%
+  group_by(Participant, Task, window_id) %>%
+  summarise(
+    EDA_median   = median(EDA, na.rm = TRUE),
+    EDA_mean     = mean(EDA, na.rm = TRUE),
+    EDA_sd       = sd(EDA, na.rm = TRUE),
+    ACC_vm_mean  = mean(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+    ACC_vm_sd    = sd(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+    HR_median    = median(HR, na.rm = TRUE),
+    TEMP_median  = median(TEMP, na.rm = TRUE),
+    SCR_count    = compute_scr_features(EDA)$SCR_count,
+    SCR_mean_amp = compute_scr_features(EDA)$SCR_mean_amp,
+    Label          = first(Label),
+    .groups = "drop"
+  )
+
+# HR features
+hr_task_T <- hr_data_1T %>%
+  group_by(Participant, Task, window_id) %>%
+  summarise(
+    HR_bangle_median = median(HR, na.rm = TRUE),
+    HR_conf_mean     = mean(Confidence, na.rm = TRUE),
+    Label              = first(Label),
+    .groups = "drop"
+  )
+
+# ECG features
+ecg_task_T <- ecg_data_1T %>%
+  group_by(Participant, Task, window_id) %>%
+  summarise(
+    RMSSD_ECG = {
+      cols <- c("ECG LL-RA CAL","ECG LA-RA CAL","ECG Vx-RL CAL")
+      col_present <- cols[cols %in% names(cur_data_all())]
+      if (length(col_present) == 0) NA_real_
+      else {
+        sig <- unlist(cur_data_all()[, col_present[1]])
+        compute_rmssd_from_ecg(sig, sampling_rate = 250)
+      }
+    },
+    Label = first(Label),
+    .groups = "drop"
+  )
+
+# -------------------------------
+# Step 5: Merge all features
+# -------------------------------
+all_features_T <- eda_task_T %>%
+  full_join(hr_task_T,  by = c("Participant", "Task", "window_id", "Label")) %>%
+  full_join(ecg_task_T, by = c("Participant", "Task", "window_id", "Label"))
+
+#colnames(all_features_T)
+```
+
+
+
+CONTINUE FROM HERE
+
+```{r}
+library(dplyr)
+
+all_features_2T <- all_features_T %>%
+  group_by(Participant, Task) %>%
+  mutate(
+    Label = ifelse(Task == "Baseline", NA, first(na.omit(Label)))
+  ) %>%
+  ungroup()
+
+unique(all_features_T$Task)
+#View(all_features_2)
+
+ #sum(is.na(all_features_2$Label))
+```
+
+
+```{r}
+#Training data, vs Test Data
+
+# Step 1: Baseline subset
+baseline_task_2T <- all_features_2T %>%
+  filter(Task == "Baseline")
+    # Inspect
+#print(baseline_rows)
+
+
+# Step 2: Join baseline to task rows (only once!)
+glm_data_norm_2T <- all_features_2T %>%
+  filter(Task != "Baseline") %>%
+  left_join(baseline_task_2T %>% select(-Task),
+            by = c("Participant", "window_id"),
+            suffix = c("", "_baseline"))
+
+# Step 3: Subtract baseline values
+glm_data_norm_2T <- glm_data_norm_2T %>%
+  mutate(
+    EDA_mean_delta    = EDA_mean    - EDA_mean_baseline,
+    EDA_median_delta  = EDA_median  - EDA_median_baseline,
+    EDA_sd_delta      = EDA_sd      - EDA_sd_baseline,
+    SCR_count_delta   = SCR_count   - SCR_count_baseline,
+    SCR_amp_delta     = SCR_mean_amp - SCR_mean_amp_baseline,
+    HR_median_delta   = HR_median   - HR_median_baseline,
+    TEMP_median_delta = TEMP_median - TEMP_median_baseline,
+    ACC_vm_mean_delta = ACC_vm_mean - ACC_vm_mean_baseline,
+    ACC_vm_sd_delta   = ACC_vm_sd   - ACC_vm_sd_baseline,
+    HR_bangle_delta   = HR_bangle_median - HR_bangle_median_baseline,
+    HR_conf_delta     = HR_conf_mean - HR_conf_mean_baseline,
+    RMSSD_ECG_delta   = RMSSD_ECG   - RMSSD_ECG_baseline
+  ) 
+
+# Step 4: Testing data prep
+glm_model_data_2T <- glm_data_norm_2T %>%
+  select(Label, ends_with("_delta"))
+
+glm_model_data_interp_2T <- glm_model_data_2T %>%
+  mutate(across(ends_with("_delta"), ~ zoo::na.approx(.x, na.rm = FALSE))) %>%
+  mutate(across(ends_with("_delta"),
+                ~ ifelse(is.na(.x), median(.x, na.rm = TRUE), .x))) %>%
+  filter(!is.na(Label))
+
+# Fix Label factor levels
+glm_model_data_interp_2T$Label <- forcats::fct_recode(glm_model_data_interp_2T$Label,
+                                                     NOSTRESS = "NO-STRESS",
+                                                     STRESS   = "STRESS")
+```
+
+```{r}
+new_data <- glm_model_data_interp_2T %>% select(-Label)
+
+# Predict with trained Random Forest
+pred_probs <- predict(model_rf_2, new_data, type = "prob")
+pred_class <- predict(model_rf_2, new_data)
+
+head(pred_probs)
+head(pred_class)
+```
+
+
+
+Prediction
+
+```{r}
+library(dplyr)
+library(caret)
+library(zoo)
+library(forcats)
+library(lubridate)
+
+predict_stress_from_folder <- function(base_folder, model_rf, window_size = 10, sampling_rate = 512) {
+  
+  # -------------------------------
+  # Load raw data
+  # -------------------------------
+  eda_data <- process_folder(file.path(base_folder, "EDA_Empatica_Signals"))
+  hr_data  <- process_folder(file.path(base_folder, "HR_Bangle_Signals"))
+  ecg_data <- process_folder(file.path(base_folder, "ECG_Shimmer3_Signals"))
+  
+  # -------------------------------
+  # Convert timestamps
+  # -------------------------------
+  eda_data <- eda_data %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+  hr_data  <- hr_data  %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+  
+  # -------------------------------
+  # Handle ECG timestamps
+  # -------------------------------
+  ecg_data_mod <- ecg_data
+  
+  # Baseline
+  baseline_df <- ecg_data_mod %>%
+    filter(Task == "Baseline") %>%
+    mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+  
+  baseline_date <- as.Date(min(baseline_df$Timestamp, na.rm = TRUE))
+  
+  # Pick first non-Baseline task
+  tasks <- unique(ecg_data_mod$Task)
+  task_name <- setdiff(tasks, "Baseline")[1]
+  
+  task_rows <- sum(ecg_data_mod$Task == task_name)
+  task_start_raw <- ecg_data_mod %>%
+    filter(Task == task_name) %>%
+    slice(1) %>%
+    pull(Timestamp)
+  
+  if (is.character(task_start_raw)) {
+    parts <- strsplit(task_start_raw, ":")[[1]]
+    hours   <- 0
+    minutes <- as.numeric(parts[1])
+    seconds <- as.numeric(parts[2])
+    task_start <- as.POSIXct(
+      paste(format(baseline_date, "%Y-%m-%d"),
+            sprintf("%02d:%02d:%02d", hours, minutes, seconds)),
+      format = "%Y-%m-%d %H:%M:%S",
+      tz = "UTC"
+    )
+  } else {
+    task_start <- task_start_raw
+  }
+  
+  task_df <- ecg_data_mod %>%
+    filter(Task == task_name) %>%
+    mutate(Timestamp = task_start + seq(0, by = 1/sampling_rate, length.out = task_rows))
+  
+  ecg_data_final <- bind_rows(baseline_df, task_df)
+  
+  # -------------------------------
+  # Add window IDs
+  # -------------------------------
+  add_window_id <- function(df, window_size) {
+    df %>%
+      group_by(Participant, Task) %>%
+      mutate(
+        rel_time = as.numeric(difftime(Timestamp, min(Timestamp), units = "secs")),
+        window_id = floor(rel_time / window_size)
+      ) %>%
+      ungroup()
+  }
+  
+  eda_data <- add_window_id(eda_data, window_size)
+  hr_data  <- add_window_id(hr_data, window_size)
+  ecg_data <- add_window_id(ecg_data_final, window_size)
+  
+  # -------------------------------
+  # Aggregate features per window
+  # -------------------------------
+  eda_task <- eda_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      EDA_median   = median(EDA, na.rm = TRUE),
+      EDA_mean     = mean(EDA, na.rm = TRUE),
+      EDA_sd       = sd(EDA, na.rm = TRUE),
+      ACC_vm_mean  = mean(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+      ACC_vm_sd    = sd(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+      HR_median    = median(HR, na.rm = TRUE),
+      TEMP_median  = median(TEMP, na.rm = TRUE),
+      SCR_count    = compute_scr_features(EDA)$SCR_count,
+      SCR_mean_amp = compute_scr_features(EDA)$SCR_mean_amp,
+      Label        = first(Label),
+      .groups = "drop"
+    )
+  
+  hr_task <- hr_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      HR_bangle_median = median(HR, na.rm = TRUE),
+      HR_conf_mean     = mean(Confidence, na.rm = TRUE),
+      Label            = first(Label),
+      .groups = "drop"
+    )
+  
+  ecg_task <- ecg_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      RMSSD_ECG = {
+        cols <- c("ECG LL-RA CAL","ECG LA-RA CAL","ECG Vx-RL CAL")
+        col_present <- cols[cols %in% names(cur_data_all())]
+        if (length(col_present) == 0) NA_real_
+        else {
+          sig <- unlist(cur_data_all()[, col_present[1]])
+          compute_rmssd_from_ecg(sig, sampling_rate = 250)
+        }
+      },
+      Label = first(Label),
+      .groups = "drop"
+    )
+  
+  # -------------------------------
+  # Merge all features
+  # -------------------------------
+  all_features <- eda_task %>%
+    full_join(hr_task,  by = c("Participant", "Task", "window_id", "Label")) %>%
+    full_join(ecg_task, by = c("Participant", "Task", "window_id", "Label"))
+  
+  # -------------------------------
+  # Baseline subtraction
+  # -------------------------------
+  all_features <- all_features %>%
+    group_by(Participant, Task) %>%
+    mutate(Label = ifelse(Task == "Baseline", NA, first(na.omit(Label)))) %>%
+    ungroup()
+  
+  baseline_task <- all_features %>% filter(Task == "Baseline")
+  
+  glm_data_norm <- all_features %>%
+    filter(Task != "Baseline") %>%
+    left_join(baseline_task %>% select(-Task),
+              by = c("Participant", "window_id"),
+              suffix = c("", "_baseline")) %>%
+    mutate(
+      EDA_mean_delta    = EDA_mean    - EDA_mean_baseline,
+      EDA_median_delta  = EDA_median  - EDA_median_baseline,
+      EDA_sd_delta      = EDA_sd      - EDA_sd_baseline,
+      SCR_count_delta   = SCR_count   - SCR_count_baseline,
+      SCR_amp_delta     = SCR_mean_amp - SCR_mean_amp_baseline,
+      HR_median_delta   = HR_median   - HR_median_baseline,
+      TEMP_median_delta = TEMP_median - TEMP_median_baseline,
+      ACC_vm_mean_delta = ACC_vm_mean - ACC_vm_mean_baseline,
+      ACC_vm_sd_delta   = ACC_vm_sd   - ACC_vm_sd_baseline,
+      HR_bangle_delta   = HR_bangle_median - HR_bangle_median_baseline,
+      HR_conf_delta     = HR_conf_mean - HR_conf_mean_baseline,
+      RMSSD_ECG_delta   = RMSSD_ECG   - RMSSD_ECG_baseline
+    )
+  
+  # -------------------------------
+  # Prepare prediction dataset
+  # -------------------------------
+  glm_model_data <- glm_data_norm %>%
+    select(Label, ends_with("_delta")) %>%
+    mutate(across(ends_with("_delta"), ~ zoo::na.approx(.x, na.rm = FALSE))) %>%
+    mutate(across(ends_with("_delta"), ~ ifelse(is.na(.x), median(.x, na.rm = TRUE), .x))) %>%
+    filter(!is.na(Label))
+  
+  glm_model_data$Label <- forcats::fct_recode(glm_model_data$Label,
+                                              NOSTRESS = "NO-STRESS",
+                                              STRESS   = "STRESS")
+  
+  new_data <- glm_model_data %>% select(-Label)
+  
+  # -------------------------------
+  # Predict
+  # -------------------------------
+  pred_probs <- predict(model_rf, new_data, type = "prob")
+  pred_class <- predict(model_rf, new_data)
+  
+  list(
+    features = new_data,
+    probabilities = pred_probs,
+    classes = pred_class
+  )
+}
+
+```
+
+
+
+```{r}
+base_folder_T <- "C:/Users/kirkm/Music/My research works/Engineering/SenseCobot"
+results <- predict_stress_from_folder(base_folder_T, model_rf_2)
+head(results$classes)
+head(results$probabilities)
+
+```
+
+
+Prediction Wthout the Lable features captured - FINAL CODE
+```{r}
+library(dplyr)
+library(caret)
+library(zoo)
+library(lubridate)
+
+predict_stress_from_folder <- function(base_folder, model_rf, window_size = 10, sampling_rate = 512) {
+  
+  # -------------------------------
+  # Load raw data
+  # -------------------------------
+  eda_data <- process_folder(file.path(base_folder, "EDA_Empatica_Signals"))
+  hr_data  <- process_folder(file.path(base_folder, "HR_Bangle_Signals"))
+  ecg_data <- process_folder(file.path(base_folder, "ECG_Shimmer3_Signals"))
+  
+  # -------------------------------
+  # Convert timestamps
+  # -------------------------------
+  eda_data <- eda_data %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+  hr_data  <- hr_data  %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+  
+  # -------------------------------
+# Handle ECG timestamps
+# -------------------------------
+ecg_data_mod <- ecg_data
+
+# Baseline
+baseline_df <- ecg_data_mod %>%
+  filter(Task == "Baseline") %>%
+  mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+
+baseline_date <- as.Date(min(baseline_df$Timestamp, na.rm = TRUE))
+
+# Non-Baseline tasks
+tasks <- setdiff(unique(ecg_data_mod$Task), "Baseline")
+task_dfs <- list()
+
+for (t in tasks) {
+  task_rows <- sum(ecg_data_mod$Task == t)
+  task_start_raw <- ecg_data_mod %>%
+    filter(Task == t) %>%
+    slice(1) %>%
+    pull(Timestamp)
+  
+  if (is.character(task_start_raw) && grepl("^\\d{1,2}:\\d{2}(\\.\\d+)?$", task_start_raw)) {
+    # Relative format "MM:SS(.fraction)" → reconstruct
+    parts <- strsplit(task_start_raw, ":")[[1]]
+    minutes <- as.numeric(parts[1])
+    seconds <- as.numeric(parts[2])
+    start_time <- as.POSIXct(
+      paste(format(baseline_date, "%Y-%m-%d"), "00:00:00"),
+      tz = "UTC"
+    ) + (minutes * 60 + seconds)
+    
+    task_df <- ecg_data_mod %>%
+      filter(Task == t) %>%
+      mutate(Timestamp = start_time + seq(0, by = 1/sampling_rate, length.out = task_rows))
+    
+  } else {
+    # Full datetime string → just parse
+    task_df <- ecg_data_mod %>%
+      filter(Task == t) %>%
+      mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+  }
+  
+  task_dfs[[t]] <- task_df
+}
+
+# Combine Baseline + all tasks
+ecg_data_final <- bind_rows(baseline_df, dplyr::bind_rows(task_dfs))
+  
+  # -------------------------------
+  # Add window IDs
+  # -------------------------------
+  add_window_id <- function(df, window_size) {
+    df %>%
+      group_by(Participant, Task) %>%
+      mutate(
+        rel_time = as.numeric(difftime(Timestamp, min(Timestamp), units = "secs")),
+        window_id = floor(rel_time / window_size)
+      ) %>%
+      ungroup()
+  }
+  
+  eda_data <- add_window_id(eda_data, window_size)
+  hr_data  <- add_window_id(hr_data, window_size)
+  ecg_data <- add_window_id(ecg_data_final, window_size)
+  
+  # -------------------------------
+  # Aggregate features per window (no Label)
+  # -------------------------------
+  eda_task <- eda_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      EDA_median   = median(EDA, na.rm = TRUE),
+      EDA_mean     = mean(EDA, na.rm = TRUE),
+      EDA_sd       = sd(EDA, na.rm = TRUE),
+      ACC_vm_mean  = mean(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+      ACC_vm_sd    = sd(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+      HR_median    = median(HR, na.rm = TRUE),
+      TEMP_median  = median(TEMP, na.rm = TRUE),
+      SCR_count    = compute_scr_features(EDA)$SCR_count,
+      SCR_mean_amp = compute_scr_features(EDA)$SCR_mean_amp,
+      .groups = "drop"
+    )
+  
+  hr_task <- hr_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      HR_bangle_median = median(HR, na.rm = TRUE),
+      HR_conf_mean     = if ("Confidence" %in% names(cur_data())) mean(Confidence, na.rm = TRUE) else NA_real_,
+      .groups = "drop"
+    )
+  
+  ecg_task <- ecg_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      RMSSD_ECG = {
+        cols <- c("ECG LL-RA CAL","ECG LA-RA CAL","ECG Vx-RL CAL")
+        col_present <- cols[cols %in% names(cur_data_all())]
+        if (length(col_present) == 0) NA_real_
+        else {
+          sig <- unlist(cur_data_all()[, col_present[1]])
+          compute_rmssd_from_ecg(sig, sampling_rate = 250)
+        }
+      },
+      .groups = "drop"
+    )
+  
+  # -------------------------------
+  # Merge all features
+  # -------------------------------
+  all_features <- eda_task %>%
+    full_join(hr_task,  by = c("Participant", "Task", "window_id")) %>%
+    full_join(ecg_task, by = c("Participant", "Task", "window_id"))
+  
+  # -------------------------------
+  # Baseline subtraction
+  # -------------------------------
+  baseline_task <- all_features %>% filter(Task == "Baseline")
+  
+  glm_data_norm <- all_features %>%
+    filter(Task != "Baseline") %>%
+    left_join(baseline_task %>% select(-Task),
+              by = c("Participant", "window_id"),
+              suffix = c("", "_baseline")) %>%
+    mutate(
+      EDA_mean_delta    = EDA_mean    - EDA_mean_baseline,
+      EDA_median_delta  = EDA_median  - EDA_median_baseline,
+      EDA_sd_delta      = EDA_sd      - EDA_sd_baseline,
+      SCR_count_delta   = SCR_count   - SCR_count_baseline,
+      SCR_amp_delta     = SCR_mean_amp - SCR_mean_amp_baseline,
+      HR_median_delta   = HR_median   - HR_median_baseline,
+      TEMP_median_delta = TEMP_median - TEMP_median_baseline,
+      ACC_vm_mean_delta = ACC_vm_mean - ACC_vm_mean_baseline,
+      ACC_vm_sd_delta   = ACC_vm_sd   - ACC_vm_sd_baseline,
+      HR_bangle_delta   = HR_bangle_median - HR_bangle_median_baseline,
+      HR_conf_delta     = HR_conf_mean - HR_conf_mean_baseline,
+      RMSSD_ECG_delta   = RMSSD_ECG   - RMSSD_ECG_baseline
+    )
+  
+  # -------------------------------
+  # Final prediction-ready dataset (no Label)
+  # -------------------------------
+  new_data <- glm_data_norm %>%
+    select(ends_with("_delta")) %>%
+    mutate(across(everything(), ~ zoo::na.approx(.x, na.rm = FALSE))) %>%
+    mutate(across(everything(), ~ ifelse(is.na(.x), median(.x, na.rm = TRUE), .x)))
+  
+  # -------------------------------
+  # Predict
+  # -------------------------------
+  pred_probs <- predict(model_rf, new_data, type = "prob")
+  pred_class <- predict(model_rf, new_data)
+  
+  list(
+    features = new_data,
+    probabilities = pred_probs,
+    classes = pred_class
+  )
+}
+
+```
+
+
+```{r}
+#base_folder_T <- "C:/Users/kirkm/Music/My research works/Engineering/SenseCobot/Test Folder"
+base_folder_T <-  "C:\\Users\\kirkm\\Music\\My research works\\Engineering\\SenseCobot\\Test Folder 2"
+results <- predict_stress_from_folder(base_folder_T, model_rf_2)
+head(results$classes)
+head(results$probabilities)
+```
+
+
+```{r}
+
+library(dplyr)
+library(caret)
+library(zoo)
+library(lubridate)
+
+predict_stress_from_folder <- function(base_folder, model_rf, window_size = 10, sampling_rate = 512) {
+  
+  # -------------------------------
+  # Load raw data
+  # -------------------------------
+  eda_data <- process_folder(file.path(base_folder, "EDA_Empatica_Signals"))
+  hr_data  <- process_folder(file.path(base_folder, "HR_Bangle_Signals"))
+  ecg_data <- process_folder(file.path(base_folder, "ECG_Shimmer3_Signals"))
+  
+  # -------------------------------
+  # Convert timestamps
+  # -------------------------------
+  eda_data <- eda_data %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+  hr_data  <- hr_data  %>% mutate(Timestamp = as.POSIXct(Timestamp, tz = "UTC"))
+  
+  # -------------------------------
+# Handle ECG timestamps
+# -------------------------------
+ecg_data_mod <- ecg_data
+
+# Baseline
+baseline_df <- ecg_data_mod %>%
+  filter(Task == "Baseline") %>%
+  mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+
+baseline_date <- as.Date(min(baseline_df$Timestamp, na.rm = TRUE))
+
+# Non-Baseline tasks
+tasks <- setdiff(unique(ecg_data_mod$Task), "Baseline")
+task_dfs <- list()
+
+for (t in tasks) {
+  task_rows <- sum(ecg_data_mod$Task == t)
+  task_start_raw <- ecg_data_mod %>%
+    filter(Task == t) %>%
+    slice(1) %>%
+    pull(Timestamp)
+  
+  # Try parsing as full datetime first
+  parsed <- suppressWarnings(
+    as.POSIXct(task_start_raw, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC")
+  )
+  
+  if (!is.na(parsed)) {
+    # Case: full datetime works
+    task_df <- ecg_data_mod %>%
+      filter(Task == t) %>%
+      mutate(Timestamp = as.POSIXct(Timestamp, format = "%Y-%m-%d %H:%M:%OS", tz = "UTC"))
+    
+  } else {
+    # Case: relative string, reconstruct
+    parts <- strsplit(task_start_raw, ":")[[1]]
+    minutes <- as.numeric(parts[1])
+    seconds <- as.numeric(parts[2])
+    start_time <- as.POSIXct(
+      paste(format(baseline_date, "%Y-%m-%d"), "00:00:00"),
+      tz = "UTC"
+    ) + (minutes * 60 + seconds)
+    
+    task_df <- ecg_data_mod %>%
+      filter(Task == t) %>%
+      mutate(Timestamp = start_time + seq(0, by = 1/sampling_rate, length.out = task_rows))
+  }
+  
+  task_dfs[[t]] <- task_df
+}
+
+
+# Combine Baseline + all tasks
+ecg_data_final <- bind_rows(baseline_df, dplyr::bind_rows(task_dfs))
+  
+  # -------------------------------
+  # Add window IDs
+  # -------------------------------
+  add_window_id <- function(df, window_size) {
+    df %>%
+      group_by(Participant, Task) %>%
+      mutate(
+        rel_time = as.numeric(difftime(Timestamp, min(Timestamp), units = "secs")),
+        window_id = floor(rel_time / window_size)
+      ) %>%
+      ungroup()
+  }
+  
+  eda_data <- add_window_id(eda_data, window_size)
+  hr_data  <- add_window_id(hr_data, window_size)
+  ecg_data <- add_window_id(ecg_data_final, window_size)
+  
+  # -------------------------------
+  # Aggregate features per window (no Label)
+  # -------------------------------
+  eda_task <- eda_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      EDA_median   = median(EDA, na.rm = TRUE),
+      EDA_mean     = mean(EDA, na.rm = TRUE),
+      EDA_sd       = sd(EDA, na.rm = TRUE),
+      ACC_vm_mean  = mean(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+      ACC_vm_sd    = sd(sqrt(ACC_X^2 + ACC_Y^2 + ACC_Z^2), na.rm = TRUE),
+      HR_median    = median(HR, na.rm = TRUE),
+      TEMP_median  = median(TEMP, na.rm = TRUE),
+      SCR_count    = compute_scr_features(EDA)$SCR_count,
+      SCR_mean_amp = compute_scr_features(EDA)$SCR_mean_amp,
+      .groups = "drop"
+    )
+  
+  hr_task <- hr_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      HR_bangle_median = median(HR, na.rm = TRUE),
+      HR_conf_mean     = if ("Confidence" %in% names(cur_data())) mean(Confidence, na.rm = TRUE) else NA_real_,
+      .groups = "drop"
+    )
+  
+  ecg_task <- ecg_data %>%
+    group_by(Participant, Task, window_id) %>%
+    summarise(
+      RMSSD_ECG = {
+        cols <- c("ECG LL-RA CAL","ECG LA-RA CAL","ECG Vx-RL CAL")
+        col_present <- cols[cols %in% names(cur_data_all())]
+        if (length(col_present) == 0) NA_real_
+        else {
+          sig <- unlist(cur_data_all()[, col_present[1]])
+          compute_rmssd_from_ecg(sig, sampling_rate = 250)
+        }
+      },
+      .groups = "drop"
+    )
+  
+  # -------------------------------
+  # Merge all features
+  # -------------------------------
+  all_features <- eda_task %>%
+    full_join(hr_task,  by = c("Participant", "Task", "window_id")) %>%
+    full_join(ecg_task, by = c("Participant", "Task", "window_id"))
+  
+  # -------------------------------
+  # Baseline subtraction
+  # -------------------------------
+  baseline_task <- all_features %>% filter(Task == "Baseline")
+  
+  glm_data_norm <- all_features %>%
+    filter(Task != "Baseline") %>%
+    left_join(baseline_task %>% select(-Task),
+              by = c("Participant", "window_id"),
+              suffix = c("", "_baseline")) %>%
+    mutate(
+      EDA_mean_delta    = EDA_mean    - EDA_mean_baseline,
+      EDA_median_delta  = EDA_median  - EDA_median_baseline,
+      EDA_sd_delta      = EDA_sd      - EDA_sd_baseline,
+      SCR_count_delta   = SCR_count   - SCR_count_baseline,
+      SCR_amp_delta     = SCR_mean_amp - SCR_mean_amp_baseline,
+      HR_median_delta   = HR_median   - HR_median_baseline,
+      TEMP_median_delta = TEMP_median - TEMP_median_baseline,
+      ACC_vm_mean_delta = ACC_vm_mean - ACC_vm_mean_baseline,
+      ACC_vm_sd_delta   = ACC_vm_sd   - ACC_vm_sd_baseline,
+      HR_bangle_delta   = HR_bangle_median - HR_bangle_median_baseline,
+      HR_conf_delta     = HR_conf_mean - HR_conf_mean_baseline,
+      RMSSD_ECG_delta   = RMSSD_ECG   - RMSSD_ECG_baseline
+    )
+  
+  # -------------------------------
+  # Final prediction-ready dataset (no Label)
+  # -------------------------------
+  new_data <- glm_data_norm %>%
+    select(ends_with("_delta")) %>%
+    mutate(across(everything(), ~ zoo::na.approx(.x, na.rm = FALSE))) %>%
+    mutate(across(everything(), ~ ifelse(is.na(.x), median(.x, na.rm = TRUE), .x)))
+  
+  # -------------------------------
+  # Predict
+  # -------------------------------
+  pred_probs <- predict(model_rf, new_data, type = "prob")
+  pred_class <- predict(model_rf, new_data)
+  
+  list(
+    features = new_data,
+    probabilities = pred_probs,
+    classes = pred_class
+  )
+}
+
+```
+
+
+
